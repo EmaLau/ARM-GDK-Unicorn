@@ -1,35 +1,30 @@
+# app/emulator/unicorn_worker.py
+import json
+import os
 import struct
 import time
+
 import websocket
-import json
-import os  # <-- Aggiunto per il controllo dell'esistenza del file ELF
 from unicorn import *
 from unicorn.arm_const import *
-from elftools.elf.elffile import ELFFile
 
-breakpoints = set()
 EXIT_SENTINEL = 0xFFFF0000
+CODE_ADDRESS = 0x10000
 
 
-def load_elf_to_unicorn(mu, filename):
+def load_binary_to_unicorn(mu, filename):
+    """Carica il pacchetto binario strutturato allocando 1 MB di memoria allineata."""
     with open(filename, 'rb') as f:
-        elf = ELFFile(f)
-        for segment in elf.iter_segments():
-            if segment['p_type'] == 'PT_LOAD':
-                size = segment['p_memsz']
-                addr = segment['p_vaddr']
-                data = segment.data()
-                if size == 0:
-                    continue
-                aligned_size = (size + 0xfff) & ~0xfff
-                aligned_addr = addr & ~0xfff
-                try:
-                    mu.mem_map(aligned_addr, aligned_size)
-                except UcError:
-                    pass
-                if data:
-                    mu.mem_write(addr, data)
-        return elf.header['e_entry']
+        data = f.read()
+
+    total_memory_to_map = 0x100000  # 1 MegaByte per evitare Out-of-Memory C
+    try:
+        mu.mem_map(CODE_ADDRESS, total_memory_to_map)
+    except UcError:
+        pass
+
+    mu.mem_write(CODE_ADDRESS, data)
+    return CODE_ADDRESS
 
 
 def send_state_to_dashboard(mu, ws, custom_output=None, is_terminated=False):
@@ -46,13 +41,10 @@ def send_state_to_dashboard(mu, ws, custom_output=None, is_terminated=False):
             "cpsr": hex(mu.reg_read(UC_ARM_REG_CPSR))
         })
 
-        # Dump dello Stack allineato a word di 4 byte
         sp_val = mu.reg_read(UC_ARM_REG_SP)
-        # Allineamento dell'indirizzo base dello stack a 4 byte
         sp_aligned = sp_val & ~0x3
         memory_dump = {}
 
-        # Mostra 10 locazioni di memoria (4 byte ciascuna) intorno allo Stack Pointer
         for offset in range(-20, 24, 4):
             addr = sp_aligned + offset
             try:
@@ -60,7 +52,7 @@ def send_state_to_dashboard(mu, ws, custom_output=None, is_terminated=False):
                 val = struct.unpack("<I", data_bytes)[0]
                 memory_dump[hex(addr)] = f"0x{val:08X}"
             except UcError:
-                pass  # Evita blocchi se lo stack tocca pagine non mappate
+                pass
 
         payload = {
             "pc": regs["pc"],
@@ -69,10 +61,9 @@ def send_state_to_dashboard(mu, ws, custom_output=None, is_terminated=False):
             "status": "terminated" if is_terminated else "running",
             "console_output": custom_output
         }
-
         ws.send(json.dumps(payload))
     except Exception as e:
-        print(f"[Unicorn] Errore nell'invio dello stato: {e}")
+        print(f"[Unicorn] Errore invio telemetria: {e}")
 
 
 def execute_single_step(mu):
@@ -80,11 +71,17 @@ def execute_single_step(mu):
     mu.emu_start(current_pc, current_pc + 4, timeout=0, count=1)
 
 
-def build_emulator(ws):
+def build_emulator(ws, elf_path):
     mu = Uc(UC_ARCH_ARM, UC_MODE_ARM)
-    entry_point = load_elf_to_unicorn(mu, "build/main.elf")
+    entry_point = load_binary_to_unicorn(mu, elf_path)
+
+    STACK_ADDR, STACK_SIZE = 0x70000000, 0x10000
+    try:
+        mu.mem_map(STACK_ADDR, STACK_SIZE)
+    except UcError:
+        pass
+    mu.reg_write(UC_ARM_REG_SP, STACK_ADDR + STACK_SIZE - 4)
     mu.reg_write(UC_ARM_REG_PC, entry_point)
-    mu.reg_write(UC_ARM_REG_SP, 0x7FFFF000)
 
     def hook_intr(uc, intno, user_data):
         if intno != 2:
@@ -92,8 +89,7 @@ def build_emulator(ws):
         r7 = uc.reg_read(UC_ARM_REG_R7)
         r0 = uc.reg_read(UC_ARM_REG_R0)
         if r7 == 1:
-            msg = f"[Unicorn] Syscall exit({r0}) intercettata. Termino l'esecuzione."
-            print(msg)
+            msg = f"[Output Emulatore] Syscall exit({r0}) intercettata."
             send_state_to_dashboard(uc, ws, custom_output=msg, is_terminated=True)
             uc.emu_stop()
         elif r7 == 4:
@@ -103,7 +99,6 @@ def build_emulator(ws):
                 buf = uc.mem_read(r1, r2)
                 decoded_str = buf.decode('utf-8', errors='ignore').strip()
                 msg = f"[Output Emulatore]: {decoded_str}"
-                print(msg)
                 send_state_to_dashboard(uc, ws, custom_output=msg)
             except UcError:
                 pass
@@ -113,23 +108,24 @@ def build_emulator(ws):
 
 
 def main():
+    elf_path = "main.elf"
+    breakpoints = set()
+
+    if not os.path.exists(elf_path):
+        with open(elf_path, "wb") as f:
+            f.write(b"\x00\x00\xa0\xe3")
+
     print("[Unicorn] Connessione al server centrale...")
-    ws = websocket.create_connection("ws://localhost:8001/telemetry")
-    ws.settimeout(0.05)
-    print("[Unicorn] Connessione stabilita con successo.")
+    try:
+        ws = websocket.create_connection("ws://127.0.0.1:8001/telemetry")
+        ws.settimeout(0.05)
+        print("[Unicorn] Connessione stabilita con successo.")
+    except Exception as e:
+        print(f"Errore connessione: {e}")
+        return
 
-    # --- CICLO DI ATTESA RESILIENTE PER LA COMPILAZIONE DALLA UI ---
-    elf_path = "build/main.elf"
-    while not os.path.exists(elf_path):
-        print(f"⏳ [Unicorn] '{elf_path}' non trovato. In attesa del click su 'Compila' nella UI...")
-        time.sleep(2)
-
-    print("🚀 [Unicorn] Rilevato 'main.elf'! Inizializzazione dell'emulatore...")
-    # ---------------------------------------------------------------
-
-    mu = build_emulator(ws)
-    is_running = False
-    has_terminated = False
+    mu = build_emulator(ws, elf_path)
+    is_running, has_terminated = False, False
 
     send_state_to_dashboard(mu, ws, custom_output="[Unicorn] Stato iniziale caricato e pronto.")
 
@@ -140,26 +136,13 @@ def main():
             if cmd_data.get("type") == "COMMAND":
                 action = cmd_data.get("action")
 
-                # Sincronizza i breakpoint aggiornati dalla UI
                 if "breakpoints" in cmd_data:
-                    global breakpoints
                     breakpoints = set(cmd_data["breakpoints"])
 
-                print(f"[Unicorn] Ricevuto comando dalla UI: {action}")
-
                 if action == "restart":
-                    is_running = False
-                    has_terminated = False
-                    try:
-                        # Controlla se l'ELF è ancora presente prima del restart
-                        if os.path.exists(elf_path):
-                            mu = build_emulator(ws)
-                            send_state_to_dashboard(mu, ws, custom_output="[Restart] Emulatore resettato.",
-                                                    is_terminated=False)
-                        else:
-                            print("[Unicorn] Errore: 'main.elf' sparito durante il restart.")
-                    except Exception as e:
-                        print(f"[Unicorn] Errore restart: {e}")
+                    is_running, has_terminated = False, False
+                    mu = build_emulator(ws, elf_path)
+                    send_state_to_dashboard(mu, ws, custom_output="[Restart] Emulatore resettato.")
                     continue
 
                 if has_terminated:
@@ -173,7 +156,7 @@ def main():
                         send_state_to_dashboard(mu, ws)
                     except UcError:
                         has_terminated = True
-                        send_state_to_dashboard(mu, ws, custom_output="[Fine Esecuzione] Eccezione CPU rilevata.",
+                        send_state_to_dashboard(mu, ws, custom_output="[Fine Esecuzione] Eccezione CPU.",
                                                 is_terminated=True)
                 elif action == "continue":
                     is_running = True
@@ -183,33 +166,27 @@ def main():
 
         except websocket.WebSocketTimeoutException:
             pass
-        except (websocket.WebSocketConnectionClosedException, ConnectionResetError):
-            print("[Unicorn] Connessione alla Dashboard persa. Uscita.")
-            break
-        except Exception as e:
-            print(f"[Unicorn] Errore imprevisto: {e}")
+        except Exception:
             break
 
         if is_running and not has_terminated:
             try:
                 execute_single_step(mu)
                 current_pc = mu.reg_read(UC_ARM_REG_PC)
+                current_pc_hex = hex(current_pc)
 
-                if current_pc in breakpoints:
+                if current_pc_hex in breakpoints:
                     is_running = False
-                    send_state_to_dashboard(mu, ws, custom_output=f"[Breakpoint] Raggiunto indirizzo {hex(current_pc)}")
+                    send_state_to_dashboard(mu, ws, custom_output=f"[Breakpoint] Raggiunto indirizzo {current_pc_hex}")
                 elif current_pc == EXIT_SENTINEL:
-                    is_running = False
-                    has_terminated = True
+                    is_running, has_terminated = False, True
                     send_state_to_dashboard(mu, ws,
                                             custom_output="[Fine Esecuzione] Raggiunta istruzione di terminazione.",
                                             is_terminated=True)
                 else:
                     send_state_to_dashboard(mu, ws)
-
             except UcError:
-                is_running = False
-                has_terminated = True
+                is_running, has_terminated = False, True
                 send_state_to_dashboard(mu, ws, custom_output="[Fine Esecuzione] Programma terminato.",
                                         is_terminated=True)
 

@@ -4,3 +4,5 @@ nicegui
 websockets
 keystone-engine
 unicorn
+websocket-client
+pyelftools
