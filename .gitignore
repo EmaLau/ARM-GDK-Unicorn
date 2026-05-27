@@ -221,11 +221,10 @@ __marimo__/
 # idea
 .idea
 
-.DS_Store
-
 /env
 venv
 ENV
 env.bak
 venv.bak
 
+.DS_Store
