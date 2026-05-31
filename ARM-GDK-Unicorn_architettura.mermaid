@@ -1,0 +1,93 @@
+---
+title: ARM-GDK-Unicorn — Architettura e flusso dati
+---
+flowchart TB
+
+    %% ─── UTENTE ───────────────────────────────────────────────────────
+    USER(["👤 Utente"])
+
+    %% ─── SCRIPT DI AVVIO ─────────────────────────────────────────────
+    subgraph BOOT ["⚙️ Avvio — start.sh / start.bat"]
+        direction LR
+        SH["Crea venv Python 3.12\npip install requirements.txt\nLancia i 3 moduli in ordine"]
+    end
+
+    %% ─── FRONTEND ────────────────────────────────────────────────────
+    subgraph FE ["🖥️ Frontend NiceGUI — porta 8080\napp/frontend/run.py"]
+        direction TB
+        FE_SRC["Viewer sorgente\n(PC evidenziato, breakpoint)"]
+        FE_REG["Griglia registri CPU\nr0-r12 · sp · lr · pc · cpsr"]
+        FE_MEM["Dump Stack\n(±20 word intorno a SP)"]
+        FE_CON["Console log eventi"]
+        FE_EDT["Editor inline Assembly"]
+        FE_BTN["Pulsanti:\nStep · Run · Pause · Restart · Compila"]
+        FE_TMR["Timer 100ms\naggiornamento differenziale"]
+    end
+
+    %% ─── BACKEND ─────────────────────────────────────────────────────
+    subgraph BE ["🔀 Backend FastAPI — porta 8001\napp/backend/main.py"]
+        direction TB
+        BE_UI["WebSocket /ui\n← comandi dalla GUI"]
+        BE_TEL["WebSocket /telemetry\n← stato dall'emulatore"]
+        BE_COMP["ARMCompiler\ncore_compiler.py"]
+
+        subgraph BE_COMP_DETAIL ["Keystone Engine — compilazione in 2 passate"]
+            direction LR
+            P1["1ª passata\nRaccoglie label .data\ncalcola offset stringhe"]
+            P2["2ª passata\nElabora .text\nconverte ldr =label → mov #addr"]
+            P3["Keystone.asm()\nProduce encoding binario"]
+            P1 --> P2 --> P3
+        end
+    end
+
+    %% ─── EMULATORE ───────────────────────────────────────────────────
+    subgraph EMU ["🔧 Unicorn Worker\napp/emulator/unicorn_worker.py"]
+        direction TB
+        EMU_LOAD["Carica flat binary\na CODE_ADDRESS = 0x10000"]
+        EMU_MEM["Mappa memoria:\n1 MB codice · 64 KB stack @ 0x70000000"]
+        EMU_HOOK["Hook SVC:\nr7=1 → exit\nr7=4 → write → stringa output"]
+        EMU_LOOP["Loop principale\nriceve comandi (timeout 50ms)\nesegue step da 150ms"]
+        EMU_STATE["Telemetria:\nPC · r0-r12 · sp · lr · cpsr\ndump stack · console output"]
+    end
+
+    %% ─── FILE SU DISCO ───────────────────────────────────────────────
+    subgraph FILES ["💾 File su disco"]
+        F_SRC["src/main.s\nsorgente GNU Assembly"]
+        F_BIN["main.elf\nflat binary\n(non un vero ELF)"]
+    end
+
+    %% ─── FLUSSO COMANDI (blu) ────────────────────────────────────────
+    USER -->|"apre browser\nlocalhost:8080"| FE_BTN
+    FE_BTN -->|"WebSocket /ui\nJSON {action, code, breakpoints}"| BE_UI
+    BE_UI -->|"action = compile"| BE_COMP
+    BE_COMP_DETAIL --> F_SRC
+    BE_COMP_DETAIL --> F_BIN
+    BE_UI -->|"action = step/run/pause/restart\nJSON {type:COMMAND}"| BE_TEL
+    BE_TEL -->|"COMMAND"| EMU_LOOP
+
+    %% ─── FLUSSO TELEMETRIA (verde) ───────────────────────────────────
+    EMU_LOAD --> EMU_MEM --> EMU_HOOK --> EMU_LOOP --> EMU_STATE
+    EMU_STATE -->|"WebSocket /telemetry\nJSON {pc, registers, memory, console_output, status}"| BE_TEL
+    BE_TEL -->|"UPDATE_STATE\nvia /ui"| BE_UI
+    BE_UI -->|"aggiorna stato globale"| FE_TMR
+    FE_TMR --> FE_SRC
+    FE_TMR --> FE_REG
+    FE_TMR --> FE_MEM
+    FE_TMR --> FE_CON
+
+    %% ─── CARICAMENTO BINARIO ─────────────────────────────────────────
+    F_BIN -->|"f.read() al restart"| EMU_LOAD
+    USER -->|"./start.sh"| BOOT
+
+    %% ─── STILI ───────────────────────────────────────────────────────
+    classDef frontend fill:#1e3a5f,stroke:#60a5fa,color:#e0f2fe
+    classDef backend  fill:#1a3a2f,stroke:#34d399,color:#d1fae5
+    classDef emulator fill:#3b2a1a,stroke:#fb923c,color:#ffedd5
+    classDef file     fill:#2d2d2d,stroke:#9ca3af,color:#f3f4f6
+    classDef user     fill:#4c1d95,stroke:#a78bfa,color:#ede9fe
+
+    class FE_SRC,FE_REG,FE_MEM,FE_CON,FE_EDT,FE_BTN,FE_TMR frontend
+    class BE_UI,BE_TEL,BE_COMP,P1,P2,P3 backend
+    class EMU_LOAD,EMU_MEM,EMU_HOOK,EMU_LOOP,EMU_STATE emulator
+    class F_SRC,F_BIN file
+    class USER user
