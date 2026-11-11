@@ -4,7 +4,7 @@ ARM-GDK-Unicorn è un ambiente didattico per lo sviluppo, l'esecuzione e il debu
 
 Il progetto combina:
 
-* **Keystone Engine** per l'assemblaggio del codice ARM;
+* **Toolchain GNU per ARM** (`arm-none-eabi-as` e `arm-none-eabi-ld`) per assemblare e collegare il codice, con la stessa sintassi usata nei corsi;
 * **Unicorn Engine** per l'emulazione della CPU ARMv7;
 * **FastAPI** come hub di comunicazione;
 * **NiceGUI** per l'interfaccia grafica web.
@@ -56,8 +56,9 @@ flowchart TB
 
     subgraph BOOT ["⚙️ Avvio — start.sh / start.bat"]
         direction LR
-        SH["Crea venv Python 3.12
+        SH["Crea venv Python
 pip install requirements.txt
+Controlla la toolchain GNU
 Lancia i 3 moduli in ordine"]
     end
 
@@ -194,23 +195,15 @@ Percorso:
 app/backend/core_compiler.py
 ```
 
-Basato su:
+Basato sulla toolchain GNU per ARM, cercata in automatico (vedi `app/toolchain.py`):
 
-* Keystone Engine
+1. `arm-none-eabi-as -g` assembla `workspace/main.s` in `build/main.o`;
+2. `arm-none-eabi-ld` lo collega in `build/main.elf`, con `.text` a `0x10000`, `.data` subito dopo ed entry point `_start`;
+3. dalle informazioni di debug (DWARF) ricava `build/lines.json`, la corrispondenza tra righe del sorgente e indirizzi usata dall'interfaccia per evidenziare la riga corrente e posizionare i breakpoint.
 
-Funzionalità:
+La sintassi è quella dell'assembler GNU: etichette (anche sulla stessa riga dell'istruzione), sezioni `.text` e `.data`, direttive come `.word`, `.byte`, `.ascii`, `.asciz`, `.space`, `.align`, `.equ`, costanti come `len = . - msg`, pseudo-istruzioni come `ldr r1, =msg` e commenti con `@`.
 
-* Parsing Assembly GNU ARM
-* Gestione label
-* Gestione sezioni .text e .data
-* Produzione del flat binary
-
-Indirizzi principali:
-
-```text
-CODE_ADDRESS = 0x10000
-DATA_ADDRESS = 0x20000
-```
+Gli errori arrivano nella console dell'interfaccia con il numero di riga, ad esempio `[Compiler Errore] Riga 4: bad instruction 'bogus r1'`.
 
 ---
 
@@ -246,8 +239,20 @@ Syscall supportate:
 
 ## Requisiti
 
-* Python 3.12+
-* pip
+* Python 3.10 o successivo, con pip
+* La toolchain GNU per ARM: servono solo `arm-none-eabi-as` e `arm-none-eabi-ld`
+
+| Sistema | Installazione della toolchain |
+| ------- | ----------------------------- |
+| Windows | [Arm GNU Toolchain](https://developer.arm.com/downloads/-/arm-gnu-toolchain-downloads), versione *arm-none-eabi* per host Windows; durante l'installazione spunta *Add path to environment variable* |
+| macOS   | `brew install arm-none-eabi-binutils` |
+| Linux   | `sudo apt install binutils-arm-none-eabi` (Debian, Ubuntu) oppure il pacchetto equivalente della distribuzione |
+
+Se la toolchain è installata in una cartella non standard, indica la sua cartella `bin` nella variabile d'ambiente `ARM_TOOLCHAIN_DIR`. Per controllare che venga trovata:
+
+```bash
+python -m app.toolchain
+```
 
 ---
 
@@ -264,7 +269,6 @@ fastapi
 uvicorn
 nicegui
 websockets
-keystone-engine
 unicorn
 websocket-client
 pyelftools
@@ -290,10 +294,20 @@ start.bat
 Lo script:
 
 1. crea il virtual environment;
-2. installa le dipendenze;
+2. installa le dipendenze e controlla la toolchain GNU (se manca, spiega come installarla e si ferma);
 3. avvia Backend;
 4. avvia Frontend;
 5. avvia Unicorn Worker.
+
+---
+
+# Test
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+I test compilano ed eseguono nell'emulatore una serie di programmi (cicli, funzioni, stringhe, `.word`, costanti calcolate, errori con numero di riga). Se la toolchain GNU non è installata vengono saltati.
 
 ---
 
@@ -336,9 +350,9 @@ ARM-GDK-Unicorn è pensato per:
 | FastAPI         | Backend                 |
 | NiceGUI         | Frontend                |
 | WebSocket       | Comunicazione real-time |
-| Keystone Engine | Assembler ARM           |
+| GNU binutils    | Assembler e linker ARM  |
 | Unicorn Engine  | Emulatore ARM           |
-| PyELFTools      | Supporto ELF            |
+| PyELFTools      | Lettura dell'ELF e delle informazioni di debug |
 
 ---
 
@@ -346,4 +360,4 @@ ARM-GDK-Unicorn è pensato per:
 
 Il codice di questo progetto è distribuito con licenza [MIT](LICENSE).
 
-Le librerie usate hanno licenze proprie: Keystone Engine e Unicorn Engine sono distribuite con licenza GPLv2, FastAPI, NiceGUI e le altre dipendenze con licenze permissive. Il repository non include il loro codice: vengono installate da `requirements.txt`.
+Le librerie usate hanno licenze proprie: Unicorn Engine e le GNU binutils sono distribuite con licenza GPL, FastAPI, NiceGUI e le altre dipendenze con licenze permissive. Il repository non include il loro codice: le librerie Python vengono installate da `requirements.txt`, la toolchain GNU separatamente.

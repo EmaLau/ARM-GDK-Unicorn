@@ -14,7 +14,7 @@ from nicegui import app, ui, background_tasks
 
 # Aggiunge la root del progetto al path per importare i percorsi condivisi
 sys.path.append(str(Path(__file__).resolve().parent.parent.parent))
-from app.paths import ensure_workspace
+from app.paths import BUILD_LINES, ensure_workspace
 
 # ---------------------------------------------------------------------------
 # Stato globale del debugger
@@ -40,8 +40,6 @@ _last_rendered_memory = None
 _last_rendered_logs_len = 0
 _last_rendered_breakpoints = set()
 
-# Indirizzo base del programma in memoria (corrisponde a CODE_ADDRESS nel compiler)
-BASE_PC = 0x10000
 # Valore sentinella che indica la fine dell'esecuzione (indirizzo non valido)
 EXIT_SENTINEL = 0xFFFF0000
 # Copia di lavoro del sorgente Assembly (workspace/main.s, creata dall'esempio se manca)
@@ -80,8 +78,12 @@ async def send_command_to_backend(action: str, current_code: str = None):
 def load_source_code():
     """
     Legge il file sorgente 'workspace/main.s' e costruisce la lista delle righe
-    annotate con numero di riga, indirizzo PC calcolato staticamente e
-    flag che indica se la riga contiene un'istruzione eseguibile.
+    annotate con numero di riga, indirizzo dell'istruzione e flag che indica se
+    la riga contiene un'istruzione eseguibile.
+
+    Gli indirizzi vengono da build/lines.json, scritto dal compilatore a partire
+    dalle informazioni di debug dell'assembler GNU: sono quelli reali, anche con
+    etichette sulla stessa riga, costanti o dati nel mezzo del codice.
 
     Se il file non esiste, restituisce un programma ARMv7 di esempio.
 
@@ -92,26 +94,22 @@ def load_source_code():
         pc_addr       -- indirizzo esadecimale della riga (stringa, es. '0x10000')
     """
     parsed_lines = []
-    current_pc = BASE_PC
+
+    # Riga (stringa, 1-based) -> indirizzo; vuoto se il programma non è compilato
+    try:
+        line_map = json.loads(BUILD_LINES.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        line_map = {}
 
     if os.path.exists(SRC_FILE_PATH):
-        with open(SRC_FILE_PATH, "r") as f:
+        with open(SRC_FILE_PATH, "r", encoding="utf-8") as f:
             righe = f.readlines()
             debugger_state["raw_source_text"] = "".join(righe)
 
             for idx, line in enumerate(righe):
                 clean_line = line.strip('\n')
-                striped = clean_line.strip()
-                is_instruction = False
-                addr_str = ""
-
-                # Una riga è un'istruzione se non è vuota, non è un commento,
-                # non è una direttiva (inizia con '.') e non è un'etichetta (termina con ':')
-                if striped and not striped.startswith(("@", "//", "/*")) and not striped.endswith(":"):
-                    if not striped.startswith("."):
-                        is_instruction = True
-                        addr_str = hex(current_pc)
-                        current_pc += 4  # Ogni istruzione ARM occupa 4 byte
+                addr_str = line_map.get(str(idx + 1), "")
+                is_instruction = bool(addr_str)
 
                 parsed_lines.append({
                     "line_num": idx + 1,
@@ -259,7 +257,7 @@ def index_page():
             ui.label('ARM v7 Integrated Debugger & Editor').classes('text-lg font-black tracking-wider text-slate-100')
 
         with ui.row().classes('items-center gap-4'):
-            # Salva il codice sorgente su disco e avvia la compilazione via Keystone
+            # Salva il codice sorgente su disco e lo compila con la toolchain GNU
             ui.button('Salva & Compila', on_click=lambda: background_tasks.create(
                 send_command_to_backend('compile', editor_textarea.value))).props(
                 'flat color=orange icon=build text-xs')
@@ -522,6 +520,8 @@ def index_page():
                         c = 'text-green-400 font-bold'
                     elif '[Fine Esecuzione]' in msg or '[Compiler Errore]' in msg:
                         c = 'text-red-400 font-bold'
+                    elif '[Compiler Avviso]' in msg:
+                        c = 'text-amber-400 font-bold'
                     elif '[Breakpoint]' in msg:
                         c = 'text-amber-400 font-bold'
                     elif '[Compiler]' in msg:

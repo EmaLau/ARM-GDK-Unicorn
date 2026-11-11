@@ -39,9 +39,10 @@ async def origin_allowed(websocket: WebSocket) -> bool:
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 compiler = ARMCompiler(PROJECT_ROOT)
 
-# Compila la copia di lavoro all'avvio, così l'emulatore trova subito un binario
-# aggiornato (il binario non è più versionato nel repository).
-compiler.save_and_compile(compiler.src_path.read_text())
+# Compila la copia di lavoro all'avvio, così l'emulatore trova subito un programma
+# aggiornato (il binario non è versionato nel repository).
+for line in compiler.compile().messages:
+    print(line)
 
 # Riferimenti globali alle connessioni WebSocket attive.
 # Nota: questa implementazione supporta un solo client UI e un solo emulatore
@@ -80,12 +81,10 @@ async def ui_endpoint(websocket: WebSocket):
 
             if action == "compile":
                 # La compilazione viene gestita interamente dal backend senza coinvolgere l'emulatore
-                success = compiler.save_and_compile(data.get("code", ""))
-                await websocket.send_json({
-                    "type": "CONSOLE_LOG",
-                    "message": "[Compiler SUCCESS] Compilazione completata con successo." if success
-                               else "[Compiler Errore] Errore di parsing dell'Assembly."
-                })
+                # Un messaggio per riga: errori e avvisi con il numero di riga del sorgente
+                result = compiler.save_and_compile(data.get("code", ""))
+                for line in result.messages:
+                    await websocket.send_json({"type": "CONSOLE_LOG", "message": line})
             else:
                 # Tutti gli altri comandi vengono inoltrati all'emulatore Unicorn
                 if unicorn_socket:
@@ -150,4 +149,6 @@ async def telemetry_endpoint(websocket: WebSocket):
 if __name__ == "__main__":
     import uvicorn
     # Avvio diretto del server uvicorn (normalmente invocato da start.sh / start.bat)
-    uvicorn.run("app.backend.main:app", host="127.0.0.1", port=8001, log_level="info")
+    # Si passa l'oggetto app, non la stringa "app.backend.main:app": così il modulo non
+    # viene importato una seconda volta (con una seconda compilazione all'avvio)
+    uvicorn.run(app, host="127.0.0.1", port=8001, log_level="info")

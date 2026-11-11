@@ -11,12 +11,13 @@ import time
 from pathlib import Path
 
 import websocket
+from elftools.elf.elffile import ELFFile
 from unicorn import *
 from unicorn.arm_const import *
 
 # Aggiunge la root del progetto al path per importare i percorsi condivisi
 sys.path.append(str(Path(__file__).resolve().parent.parent.parent))
-from app.paths import BUILD_BIN
+from app.paths import BUILD_ELF
 
 # Indirizzo sentinella: se il PC raggiunge questo valore il programma è terminato
 EXIT_SENTINEL = 0xFFFF0000
@@ -24,33 +25,56 @@ EXIT_SENTINEL = 0xFFFF0000
 CODE_ADDRESS = 0x10000
 
 
-def load_binary_to_unicorn(mu, filename):
-    """
-    Carica il flat binary prodotto dal compilatore nello spazio di indirizzamento
-    dell'emulatore Unicorn.
+PAGE = 0x1000
 
-    Mappa 1 MB di memoria a partire da CODE_ADDRESS per evitare errori
-    di accesso alla memoria durante l'esecuzione. Se la memoria è già
-    mappata (es. dopo un restart) l'eccezione viene ignorata silenziosamente.
+
+def _page_range(start, size):
+    """Allinea una regione ai confini di pagina (4 KB), come richiesto da Unicorn."""
+    first = start & ~(PAGE - 1)
+    last = (start + size + PAGE - 1) & ~(PAGE - 1)
+    return first, last
+
+
+def load_program(mu, elf_path):
+    """
+    Carica nell'emulatore l'ELF prodotto dal linker GNU.
+
+    Mappa e copia in memoria ogni segmento caricabile (PT_LOAD), azzerando la parte
+    non presente nel file (.bss), e restituisce l'entry point (_start).
+    Se il programma non è ancora stato compilato mappa una pagina vuota a
+    CODE_ADDRESS, così l'interfaccia mostra comunque registri e stack.
 
     Parametri:
         mu       -- istanza Unicorn
-        filename -- percorso del file binario (build/main.bin)
+        elf_path -- percorso dell'ELF (build/main.elf)
 
     Ritorna:
-        CODE_ADDRESS -- indirizzo di ingresso del programma
+        (entry_point, caricato) -- caricato è False se l'ELF non esiste
     """
-    with open(filename, 'rb') as f:
-        data = f.read()
+    if not elf_path.exists():
+        mu.mem_map(CODE_ADDRESS, PAGE)
+        return CODE_ADDRESS, False
 
-    total_memory_to_map = 0x100000  # 1 MegaByte
-    try:
-        mu.mem_map(CODE_ADDRESS, total_memory_to_map)
-    except UcError:
-        pass  # La regione era già mappata (es. restart senza ricreare l'istanza)
+    with open(elf_path, "rb") as f:
+        elf = ELFFile(f)
+        segments = [s for s in elf.iter_segments() if s["p_type"] == "PT_LOAD" and s["p_memsz"] > 0]
 
-    mu.mem_write(CODE_ADDRESS, data)
-    return CODE_ADDRESS
+        # Unisce le pagine dei segmenti: due segmenti possono condividere la stessa pagina
+        regions = []
+        for seg in sorted(segments, key=lambda s: s["p_vaddr"]):
+            first, last = _page_range(seg["p_vaddr"], seg["p_memsz"])
+            if regions and first <= regions[-1][1]:
+                regions[-1][1] = max(regions[-1][1], last)
+            else:
+                regions.append([first, last])
+        for first, last in regions:
+            mu.mem_map(first, last - first)
+
+        for seg in segments:
+            data = seg.data()
+            mu.mem_write(seg["p_vaddr"], data + b"\x00" * (seg["p_memsz"] - len(data)))
+
+        return elf.header.e_entry, True
 
 
 def send_state_to_dashboard(mu, ws, custom_output=None, is_terminated=False):
@@ -120,13 +144,13 @@ def execute_single_step(mu):
     mu.emu_start(current_pc, current_pc + 4, timeout=0, count=1)
 
 
-def build_emulator(ws, bin_path):
+def build_emulator(ws, elf_path):
     """
     Crea e configura una nuova istanza dell'emulatore Unicorn ARMv7.
 
     Operazioni:
       1. Crea l'istanza Unicorn in modalità ARM a 32 bit
-      2. Carica il flat binary in memoria
+      2. Carica l'ELF in memoria (segmenti PT_LOAD)
       3. Mappa e inizializza lo stack (64 KB a partire da 0x70000000)
       4. Imposta SP alla cima dello stack e PC all'entry point
       5. Registra l'hook per le syscall SVC (interrupt software)
@@ -137,13 +161,13 @@ def build_emulator(ws, bin_path):
 
     Parametri:
         ws       -- connessione WebSocket per l'invio della telemetria
-        bin_path -- percorso del flat binary da caricare
+        elf_path -- percorso dell'ELF da caricare
 
     Ritorna:
-        mu -- istanza Unicorn configurata e pronta per l'esecuzione
+        (mu, caricato) -- istanza Unicorn pronta; caricato è False se manca il programma
     """
     mu = Uc(UC_ARCH_ARM, UC_MODE_ARM)
-    entry_point = load_binary_to_unicorn(mu, bin_path)
+    entry_point, loaded = load_program(mu, elf_path)
 
     # Alloca lo stack: 64 KB a partire dall'indirizzo 0x70000000
     STACK_ADDR, STACK_SIZE = 0x70000000, 0x10000
@@ -185,14 +209,14 @@ def build_emulator(ws, bin_path):
                 pass  # Il buffer punta a memoria non mappata
 
     mu.hook_add(UC_HOOK_INTR, hook_intr)
-    return mu
+    return mu, loaded
 
 
 def main():
     """
     Ciclo principale del worker.
 
-    1. Verifica o crea un binario placeholder (mov r0, #0) se build/main.bin non esiste.
+    1. Carica build/main.elf (o una pagina vuota se non è ancora stato compilato).
     2. Si connette al backend via WebSocket (ws://127.0.0.1:8001/telemetry).
     3. Entra in un loop che:
        a. Legge eventuali comandi dal backend (con timeout di 50ms)
@@ -200,14 +224,9 @@ def main():
           e invia la telemetria al backend.
        c. Introduce un delay di 150ms tra i passi per permettere alla UI di aggiornare.
     """
-    bin_path = BUILD_BIN
+    elf_path = BUILD_ELF
     breakpoints = set()
-
-    # Crea un binario placeholder (mov r0, #0) se il backend non ha ancora compilato nulla
-    if not bin_path.exists():
-        bin_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(bin_path, "wb") as f:
-            f.write(b"\x00\x00\xa0\xe3")  # Encoding ARM di: mov r0, #0
+    not_compiled = "[Unicorn] Nessun programma compilato: correggi il codice e premi 'Salva & Compila'."
 
     print("[Unicorn] Connessione al server centrale...")
     try:
@@ -218,12 +237,13 @@ def main():
         print(f"Errore connessione: {e}")
         return
 
-    mu = build_emulator(ws, bin_path)
+    mu, loaded = build_emulator(ws, elf_path)
     is_running = False    # True quando l'esecuzione continua è attiva
     has_terminated = False  # True dopo aver raggiunto il punto di terminazione
 
     # Invia lo stato iniziale così la UI mostra i valori dei registri prima di qualsiasi step
-    send_state_to_dashboard(mu, ws, custom_output="[Unicorn] Stato iniziale caricato e pronto.")
+    send_state_to_dashboard(mu, ws, custom_output="[Unicorn] Stato iniziale caricato e pronto." if loaded
+                            else not_compiled)
 
     while True:
         # --- Fase 1: ricezione dei comandi dal backend ---
@@ -240,8 +260,9 @@ def main():
                 if action == "restart":
                     # Reimposta lo stato e ricrea l'emulatore da zero
                     is_running, has_terminated = False, False
-                    mu = build_emulator(ws, bin_path)
-                    send_state_to_dashboard(mu, ws, custom_output="[Restart] Emulatore resettato.")
+                    mu, loaded = build_emulator(ws, elf_path)
+                    send_state_to_dashboard(mu, ws, custom_output="[Restart] Emulatore resettato." if loaded
+                                            else not_compiled)
                     continue
 
                 # Se il programma è già terminato, risponde comunque con lo stato finale

@@ -4,7 +4,9 @@
 #
 #   examples/hello.s   -- programma di esempio, versionato
 #   workspace/main.s   -- copia di lavoro modificata dall'editor (ignorata da git)
-#   build/main.bin     -- binario prodotto dal compilatore (ignorato da git)
+#   build/main.o       -- file oggetto prodotto dall'assembler GNU (ignorato da git)
+#   build/main.elf     -- programma collegato dal linker GNU, caricato dall'emulatore
+#   build/lines.json   -- corrispondenza riga del sorgente -> indirizzo, per l'interfaccia
 
 import shutil
 from pathlib import Path
@@ -12,7 +14,10 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 EXAMPLE_SRC = PROJECT_ROOT / "examples" / "hello.s"
 WORKSPACE_SRC = PROJECT_ROOT / "workspace" / "main.s"
-BUILD_BIN = PROJECT_ROOT / "build" / "main.bin"
+BUILD_DIR = PROJECT_ROOT / "build"
+BUILD_OBJ = BUILD_DIR / "main.o"
+BUILD_ELF = BUILD_DIR / "main.elf"
+BUILD_LINES = BUILD_DIR / "lines.json"
 
 
 def ensure_workspace() -> Path:

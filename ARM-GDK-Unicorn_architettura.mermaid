@@ -9,7 +9,7 @@ flowchart TB
     %% ─── SCRIPT DI AVVIO ─────────────────────────────────────────────
     subgraph BOOT ["⚙️ Avvio — start.sh / start.bat"]
         direction LR
-        SH["Crea venv Python 3.12\npip install requirements.txt\nLancia i 3 moduli in ordine"]
+        SH["Crea venv Python\npip install requirements.txt\nControlla la toolchain GNU\nLancia i 3 moduli in ordine"]
     end
 
     %% ─── FRONTEND ────────────────────────────────────────────────────
@@ -31,11 +31,11 @@ flowchart TB
         BE_TEL["WebSocket /telemetry\n← stato dall'emulatore"]
         BE_COMP["ARMCompiler\ncore_compiler.py"]
 
-        subgraph BE_COMP_DETAIL ["Keystone Engine — compilazione in 2 passate"]
+        subgraph BE_COMP_DETAIL ["Toolchain GNU per ARM — compilazione"]
             direction LR
-            P1["1ª passata\nRaccoglie label .data\ncalcola offset stringhe"]
-            P2["2ª passata\nElabora .text\nconverte ldr =label → mov #addr"]
-            P3["Keystone.asm()\nProduce encoding binario"]
+            P1["arm-none-eabi-as -g\nAssembla workspace/main.s\n→ build/main.o"]
+            P2["arm-none-eabi-ld\n.text a 0x10000, entry _start\n→ build/main.elf"]
+            P3["Lettura DWARF\nriga → indirizzo\n→ build/lines.json"]
             P1 --> P2 --> P3
         end
     end
@@ -53,7 +53,7 @@ flowchart TB
     %% ─── FILE SU DISCO ───────────────────────────────────────────────
     subgraph FILES ["💾 File su disco"]
         F_SRC["workspace/main.s\nsorgente GNU Assembly\n(copia di examples/hello.s)"]
-        F_BIN["build/main.bin\nflat binary\n(non un vero ELF)"]
+        F_BIN["build/main.elf\nprogramma collegato\n+ build/lines.json"]
     end
 
     %% ─── FLUSSO COMANDI (blu) ────────────────────────────────────────

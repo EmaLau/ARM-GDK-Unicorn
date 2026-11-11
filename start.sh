@@ -3,7 +3,7 @@
 # Script di avvio dell'architettura modulare ARM GDK Unicorn.
 # Esegue in sequenza:
 #   1. Creazione del virtual environment Python (se assente)
-#   2. Installazione delle dipendenze da requirements.txt
+#   2. Installazione delle dipendenze da requirements.txt e controllo della toolchain GNU per ARM
 #   3. Avvio del Backend FastAPI (porta 8001)
 #   4. Avvio del Frontend NiceGUI (porta 8080)
 #   5. Avvio dell'Emulatore Unicorn Worker (client WebSocket)
@@ -20,16 +20,23 @@ PROJECT_DIR=$(pwd)
 echo "[START] Configurazione ed esecuzione dell'architettura modulare..."
 
 # --- Gestione del virtual environment ---
-# Crea l'ambiente virtuale con Python 3.12 solo se non esiste già
+# Crea l'ambiente virtuale solo se non esiste già (Python 3.12 se c'è, altrimenti python3)
 if [ ! -d "env" ]; then
-    echo "[INIT] Creazione del virtual environment con Python 3.12..."
-    python3.12 -m venv env
+    PYTHON_BIN="$(command -v python3.12 || command -v python3)"
+    echo "[INIT] Creazione del virtual environment con $PYTHON_BIN..."
+    "$PYTHON_BIN" -m venv env || { echo "[ERRORE] Impossibile creare il virtual environment."; exit 1; }
 fi
 
 echo "[SETUP] Controllo e installazione dei requisiti..."
 source env/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt
+
+# Il compilatore usa la toolchain GNU per ARM: se manca, spiega come installarla e si ferma
+if ! python -m app.toolchain; then
+    deactivate
+    exit 1
+fi
 deactivate
 
 echo "[INFO] Ambiente pronto. Rilevamento del Sistema Operativo..."
@@ -66,9 +73,8 @@ fi
 # --- Avvio dei moduli in ordine di dipendenza ---
 
 # 1. Backend FastAPI (porta 8001)
-#    DYLD_LIBRARY_PATH serve su macOS per trovare la libreria Keystone installata via Homebrew.
 #    PYTHONPATH=. permette import assoluti dalla root del progetto.
-CMD_BACKEND="DYLD_LIBRARY_PATH=/opt/homebrew/opt/keystone/lib PYTHONPATH=. python3 app/backend/main.py"
+CMD_BACKEND="PYTHONPATH=. python3 app/backend/main.py"
 run_module "Backend FastAPI" "$CMD_BACKEND" "logs/backend.log"
 
 # Attende 2 secondi per garantire che il backend sia in ascolto prima di avviare i client

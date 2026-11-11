@@ -3,7 +3,7 @@ REM start.bat
 REM Script di avvio per Windows dell'architettura ARM GDK Unicorn.
 REM Esegue in sequenza:
 REM   1. Creazione del virtual environment Python (se assente)
-REM   2. Installazione delle dipendenze da requirements.txt
+REM   2. Installazione delle dipendenze da requirements.txt e controllo della toolchain GNU per ARM
 REM   3. Avvio del Backend FastAPI in una nuova finestra cmd (porta 8001)
 REM   4. Attesa ATTIVA finché la porta 8001 non risponde (max 30 secondi)
 REM   5. Avvio dell'Emulatore Unicorn Worker in una nuova finestra cmd
@@ -37,6 +37,14 @@ python -m pip install --upgrade pip --quiet
 pip install -r requirements.txt --quiet
 if errorlevel 1 (
     echo [ERRORE] Installazione dipendenze fallita. Controlla requirements.txt e la connessione.
+    pause
+    exit /b 1
+)
+
+REM Il compilatore usa la toolchain GNU per ARM: se manca, spiega come installarla e si ferma
+python -m app.toolchain
+if errorlevel 1 (
+    call env\Scripts\deactivate.bat
     pause
     exit /b 1
 )
