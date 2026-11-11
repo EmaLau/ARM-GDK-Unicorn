@@ -1,12 +1,14 @@
 # app/backend/core_compiler.py
 # Compilatore ARMv7 basato su Keystone Engine.
 # Legge il sorgente GNU Assembly, risolve label e direttive .data/.text,
-# produce un flat binary (main.elf) compatibile con l'emulatore Unicorn.
+# produce un flat binary (build/main.bin) compatibile con l'emulatore Unicorn.
 
 import re
 from pathlib import Path
 
 from keystone import Ks, KS_ARCH_ARM, KS_MODE_ARM
+
+from app.paths import BUILD_BIN, ensure_workspace
 
 
 class ARMCompiler:
@@ -25,10 +27,10 @@ class ARMCompiler:
 
     def __init__(self, project_root: Path):
         self.project_root = project_root
-        # File sorgente Assembly di input
-        self.src_path = project_root / "src" / "main.s"
-        # File binario flat di output (caricato dall'emulatore Unicorn)
-        self.elf_path = project_root / "main.elf"
+        # Copia di lavoro del sorgente Assembly (workspace/main.s, ignorata da git)
+        self.src_path = ensure_workspace()
+        # File binario flat di output (build/main.bin, caricato dall'emulatore Unicorn)
+        self.bin_path = BUILD_BIN
 
         # Indirizzo di caricamento della sezione .text (deve coincidere con CODE_ADDRESS in unicorn_worker.py)
         self.CODE_ADDRESS = 0x10000
@@ -144,7 +146,8 @@ class ARMCompiler:
             encoding, count = ks.asm(pure_assembly, self.CODE_ADDRESS)
 
             # Scrive il binario flat: codice | padding | dati
-            with open(self.elf_path, "wb") as f:
+            self.bin_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.bin_path, "wb") as f:
                 f.write(bytearray(encoding))
                 # Padding di zero-byte tra la fine del codice e l'inizio di .data
                 padding_size = self.DATA_ADDRESS - (self.CODE_ADDRESS + len(encoding))

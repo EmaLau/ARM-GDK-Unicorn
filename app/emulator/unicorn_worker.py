@@ -5,13 +5,18 @@
 # e invia lo stato dell'emulatore (registri, memoria, output) al backend.
 
 import json
-import os
 import struct
+import sys
 import time
+from pathlib import Path
 
 import websocket
 from unicorn import *
 from unicorn.arm_const import *
+
+# Aggiunge la root del progetto al path per importare i percorsi condivisi
+sys.path.append(str(Path(__file__).resolve().parent.parent.parent))
+from app.paths import BUILD_BIN
 
 # Indirizzo sentinella: se il PC raggiunge questo valore il programma è terminato
 EXIT_SENTINEL = 0xFFFF0000
@@ -30,7 +35,7 @@ def load_binary_to_unicorn(mu, filename):
 
     Parametri:
         mu       -- istanza Unicorn
-        filename -- percorso del file binario (main.elf)
+        filename -- percorso del file binario (build/main.bin)
 
     Ritorna:
         CODE_ADDRESS -- indirizzo di ingresso del programma
@@ -115,7 +120,7 @@ def execute_single_step(mu):
     mu.emu_start(current_pc, current_pc + 4, timeout=0, count=1)
 
 
-def build_emulator(ws, elf_path):
+def build_emulator(ws, bin_path):
     """
     Crea e configura una nuova istanza dell'emulatore Unicorn ARMv7.
 
@@ -132,13 +137,13 @@ def build_emulator(ws, elf_path):
 
     Parametri:
         ws       -- connessione WebSocket per l'invio della telemetria
-        elf_path -- percorso del flat binary da caricare
+        bin_path -- percorso del flat binary da caricare
 
     Ritorna:
         mu -- istanza Unicorn configurata e pronta per l'esecuzione
     """
     mu = Uc(UC_ARCH_ARM, UC_MODE_ARM)
-    entry_point = load_binary_to_unicorn(mu, elf_path)
+    entry_point = load_binary_to_unicorn(mu, bin_path)
 
     # Alloca lo stack: 64 KB a partire dall'indirizzo 0x70000000
     STACK_ADDR, STACK_SIZE = 0x70000000, 0x10000
@@ -187,7 +192,7 @@ def main():
     """
     Ciclo principale del worker.
 
-    1. Verifica o crea un binario placeholder (NOP) se main.elf non esiste.
+    1. Verifica o crea un binario placeholder (mov r0, #0) se build/main.bin non esiste.
     2. Si connette al backend via WebSocket (ws://127.0.0.1:8001/telemetry).
     3. Entra in un loop che:
        a. Legge eventuali comandi dal backend (con timeout di 50ms)
@@ -195,12 +200,13 @@ def main():
           e invia la telemetria al backend.
        c. Introduce un delay di 150ms tra i passi per permettere alla UI di aggiornare.
     """
-    elf_path = "main.elf"
+    bin_path = BUILD_BIN
     breakpoints = set()
 
-    # Crea un binario placeholder (MOV r0, r0 = NOP) se il file non esiste ancora
-    if not os.path.exists(elf_path):
-        with open(elf_path, "wb") as f:
+    # Crea un binario placeholder (mov r0, #0) se il backend non ha ancora compilato nulla
+    if not bin_path.exists():
+        bin_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(bin_path, "wb") as f:
             f.write(b"\x00\x00\xa0\xe3")  # Encoding ARM di: mov r0, #0
 
     print("[Unicorn] Connessione al server centrale...")
@@ -212,7 +218,7 @@ def main():
         print(f"Errore connessione: {e}")
         return
 
-    mu = build_emulator(ws, elf_path)
+    mu = build_emulator(ws, bin_path)
     is_running = False    # True quando l'esecuzione continua è attiva
     has_terminated = False  # True dopo aver raggiunto il punto di terminazione
 
@@ -234,7 +240,7 @@ def main():
                 if action == "restart":
                     # Reimposta lo stato e ricrea l'emulatore da zero
                     is_running, has_terminated = False, False
-                    mu = build_emulator(ws, elf_path)
+                    mu = build_emulator(ws, bin_path)
                     send_state_to_dashboard(mu, ws, custom_output="[Restart] Emulatore resettato.")
                     continue
 

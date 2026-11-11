@@ -105,12 +105,14 @@ ARM-GDK-Unicorn/
 ├── start.sh
 ├── start.bat
 ├── requirements.txt
-├── main.elf
+├── LICENSE
 │
-├── src/
-│   └── main.s
+├── examples/
+│   └── hello.s            programma di esempio
 │
 ├── app/
+│   ├── paths.py           percorsi condivisi dai tre moduli
+│   │
 │   ├── backend/
 │   │   ├── main.py
 │   │   └── core_compiler.py
@@ -121,8 +123,14 @@ ARM-GDK-Unicorn/
 │   └── frontend/
 │       └── run.py
 │
+├── workspace/             generata, ignorata da git
+│   └── main.s             copia di lavoro modificata dall'editor
+├── build/                 generata, ignorata da git
+│   └── main.bin           binario prodotto dal compilatore
 └── env/
 ```
+
+Al primo avvio `workspace/main.s` viene creato copiando `examples/hello.s`: l'editor modifica solo la copia di lavoro, quindi l'esempio e il repository restano puliti.
 
 ---
 
@@ -167,6 +175,7 @@ Responsabilità:
 * Compilazione del codice
 * Smistamento dei messaggi
 * Coordinamento tra GUI ed emulatore
+* Accetta connessioni WebSocket solo dai moduli locali: le connessioni aperte da pagine web (header `Origin` di un browser) vengono rifiutate
 
 Endpoint:
 
@@ -335,6 +344,6 @@ ARM-GDK-Unicorn è pensato per:
 
 # Licenza
 
-Progetto sviluppato a scopo didattico e di ricerca.
+Il codice di questo progetto è distribuito con licenza [MIT](LICENSE).
 
-Verificare eventuali licenze delle librerie di terze parti utilizzate (Keystone Engine, Unicorn Engine, FastAPI, NiceGUI).
+Le librerie usate hanno licenze proprie: Keystone Engine e Unicorn Engine sono distribuite con licenza GPLv2, FastAPI, NiceGUI e le altre dipendenze con licenze permissive. Il repository non include il loro codice: vengono installate da `requirements.txt`.

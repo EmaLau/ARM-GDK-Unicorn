@@ -6,9 +6,15 @@ import asyncio
 import json
 import os
 import re
+import sys
+from pathlib import Path
 
 import websockets
 from nicegui import app, ui, background_tasks
+
+# Aggiunge la root del progetto al path per importare i percorsi condivisi
+sys.path.append(str(Path(__file__).resolve().parent.parent.parent))
+from app.paths import ensure_workspace
 
 # ---------------------------------------------------------------------------
 # Stato globale del debugger
@@ -38,8 +44,8 @@ _last_rendered_breakpoints = set()
 BASE_PC = 0x10000
 # Valore sentinella che indica la fine dell'esecuzione (indirizzo non valido)
 EXIT_SENTINEL = 0xFFFF0000
-# Percorso del file sorgente Assembly rispetto alla root del progetto
-SRC_FILE_PATH = "src/main.s"
+# Copia di lavoro del sorgente Assembly (workspace/main.s, creata dall'esempio se manca)
+SRC_FILE_PATH = ensure_workspace()
 
 # Connessione WebSocket verso il backend; condivisa tra coroutine tramite lock
 backend_ws = None
@@ -73,7 +79,7 @@ async def send_command_to_backend(action: str, current_code: str = None):
 
 def load_source_code():
     """
-    Legge il file sorgente 'src/main.s' e costruisce la lista delle righe
+    Legge il file sorgente 'workspace/main.s' e costruisce la lista delle righe
     annotate con numero di riga, indirizzo PC calcolato staticamente e
     flag che indica se la riga contiene un'istruzione eseguibile.
 
@@ -301,7 +307,7 @@ def index_page():
                 'bg-slate-950 border border-slate-800 p-2 shadow-xl flex-[2] min-w-[550px] h-[580px] flex flex-col'):
             with ui.tabs().classes('w-full border-b border-slate-800') as tabs:
                 tab_debug = ui.tab('Monitor Debugger')
-                tab_editor = ui.tab('Scrivi Codice (src/main.s)')
+                tab_editor = ui.tab('Scrivi Codice (workspace/main.s)')
 
             with ui.tab_panels(tabs, value=tab_debug).classes('w-full bg-transparent flex-grow p-2 text-xs'):
 
@@ -531,4 +537,5 @@ def index_page():
     ui.timer(0.1, update_ui_loop)
 
 
-ui.run(host='0.0.0.0', port=8080, title="ARM Custom Integrated Debugger", reload=False, show=True)
+# Solo in locale: con 0.0.0.0 chiunque sulla stessa rete potrebbe aprire il debugger
+ui.run(host='127.0.0.1', port=8080, title="ARM Custom Integrated Debugger", reload=False, show=True)
