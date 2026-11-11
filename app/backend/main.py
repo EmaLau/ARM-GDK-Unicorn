@@ -61,7 +61,8 @@ async def ui_endpoint(websocket: WebSocket):
     Endpoint WebSocket per la GUI NiceGUI.
 
     Comandi supportati in ingresso (campo 'action' del payload JSON):
-      compile          -- compila il codice Assembly fornito nel campo 'code'
+      compile          -- salva e compila il codice del campo 'code'; se va a buon fine
+                          ricarica l'emulatore con il nuovo programma
       step             -- esegui un singolo passo nell'emulatore
       continue         -- riprendi l'esecuzione continua
       pause            -- metti in pausa l'esecuzione
@@ -94,6 +95,17 @@ async def ui_endpoint(websocket: WebSocket):
                 result = compiler.save_and_compile(data.get("code", ""))
                 for line in result.messages:
                     await websocket.send_json({"type": "CONSOLE_LOG", "message": line})
+                # Il nuovo programma viene caricato subito nell'emulatore: Step e Continue
+                # non eseguono mai una versione vecchia del codice
+                if result.ok and unicorn_socket:
+                    try:
+                        await unicorn_socket.send_json({
+                            "type": "COMMAND", "action": "restart",
+                            "breakpoints": data.get("breakpoints", []), "speed": data.get("speed"),
+                        })
+                    except Exception as e:
+                        log.warning("Caricamento del nuovo programma nell'emulatore fallito (%s)", e)
+                        unicorn_socket = None
             else:
                 # Tutti gli altri comandi vengono inoltrati all'emulatore Unicorn
                 if unicorn_socket:
@@ -149,6 +161,7 @@ async def telemetry_endpoint(websocket: WebSocket):
                             "pc": data.get("pc", "0x10000"),
                             "registers": data.get("registers", {}),
                             "memory": data.get("memory", {}),
+                            "data_memory": data.get("data_memory", []),
                             "console_output": data.get("console_output", ""),
                             "status": data.get("status", "running")
                         }

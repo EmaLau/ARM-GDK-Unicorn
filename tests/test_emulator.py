@@ -129,6 +129,33 @@ loop:
         self.assertTrue(emu.terminated)
         self.assertTrue(any("Eccezione della CPU a 0x10004" in m for m in emu.take_messages()))
 
+    def test_memoria_data_con_etichette(self):
+        emu = self.emulator("""
+.global _start
+_start:
+    ldr r1, =val
+    mov r0, #7
+    str r0, [r1]
+    mov r7, #1
+    svc 0
+.data
+msg: .ascii "Ciao"
+val: .word 42
+.bss
+buf: .space 8
+""")
+        rows = emu.data_view()
+        self.assertEqual([r["label"] for r in rows], ["msg", "val", "buf", ""])
+        self.assertEqual(rows[0]["ascii"], "Ciao")
+        self.assertEqual(rows[1]["value"], "0x0000002A")
+        self.assertEqual([r["section"] for r in rows], [".data", ".data", ".bss", ".bss"])
+        emu.run(1000)
+        self.assertEqual(emu.data_view()[1]["value"], "0x00000007")   # la str si vede subito
+
+    def test_programma_senza_dati(self):
+        emu = self.emulator(".global _start\n_start:\n    mov r7, #1\n    svc 0\n")
+        self.assertEqual(emu.data_view(), [])
+
     def test_esecuzione_a_blocchi_veloce(self):
         emu = self.emulator("""
 .global _start

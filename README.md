@@ -331,19 +331,22 @@ A ogni push GitHub Actions esegue gli stessi test su Windows, macOS e Linux, con
 
 # Workflow
 
-1. Scrivere Assembly ARM nell'editor.
-2. Premere **Compila**.
-3. Premere **Restart**.
-4. Eseguire:
+1. Scrivere Assembly ARM nell'editor. Finché non si salva, accanto al pulsante compare **● Modifiche non salvate**.
+2. Premere **Salva & Compila**: se la compilazione va a buon fine il programma viene caricato subito nell'emulatore, dall'inizio. Continue, Step e Restart non ricompilano: eseguono sempre l'ultima versione compilata (e avvisano se l'editor ha modifiche non salvate).
+3. Eseguire:
 
    * Step
    * Continue, scegliendo la velocità nel menu *Velocità*
    * Pause
-5. Analizzare:
+4. Analizzare:
 
-   * registri;
-   * stack;
-   * output console.
+   * registri, con il registro usato dall'istruzione corrente evidenziato;
+   * flag **N Z C V** del CPSR, accesi quando valgono 1 (passando sopra con il mouse se ne legge il significato);
+   * stack intorno a SP;
+   * memoria **.data** (e .bss): una riga per parola, con etichetta (`msg`, `val`…), valore esadecimale e caratteri ASCII;
+   * output della console.
+
+Si possono aprire più schede del browser sullo stesso debugger: mostrano tutte lo stesso stato, e l'editor di una scheda si aggiorna quando un'altra compila (se non ha modifiche in corso).
 
 ---
 

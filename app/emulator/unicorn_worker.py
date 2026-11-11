@@ -78,7 +78,63 @@ def load_program(mu, elf_path):
         return elf.header.e_entry, True
 
 
-def send_state_to_dashboard(mu, ws, custom_output=None, is_terminated=False):
+DATA_SECTIONS = (".data", ".bss")
+MAX_DATA_WORDS = 64   # parole mostrate nel riquadro "Memoria .data" (256 byte)
+
+
+def program_data_info(elf_path):
+    """
+    Legge dall'ELF le sezioni dati e le etichette che contengono.
+
+    Ritorna (regioni, etichette): regioni è una lista di (nome, indirizzo, dimensione)
+    per .data e .bss; etichette è {indirizzo: nome} per i simboli definiti in quelle
+    sezioni (es. msg, val), esclusi i simboli interni dell'assembler come $d.
+    """
+    if not elf_path.exists():
+        return [], {}
+    regions, labels = [], {}
+    with open(elf_path, "rb") as f:
+        elf = ELFFile(f)
+        indexes = {}
+        for i, sec in enumerate(elf.iter_sections()):
+            if sec.name in DATA_SECTIONS and sec["sh_size"] > 0:
+                regions.append((sec.name, sec["sh_addr"], sec["sh_size"]))
+                indexes[i] = sec.name
+        symtab = elf.get_section_by_name(".symtab")
+        if symtab is not None:
+            for sym in symtab.iter_symbols():
+                if (sym.name and not sym.name.startswith("$") and sym["st_shndx"] in indexes
+                        and sym["st_info"]["type"] in ("STT_NOTYPE", "STT_OBJECT")):
+                    labels.setdefault(sym["st_value"], sym.name)
+    return regions, labels
+
+
+def data_memory_view(mu, regions, labels):
+    """
+    Righe del riquadro "Memoria .data": una per parola di 4 byte, con indirizzo,
+    etichetta (se una inizia in quella parola), valore esadecimale e caratteri ASCII.
+    """
+    rows = []
+    for name, start, size in regions:
+        addr = start & ~0x3
+        while addr < start + size and len(rows) < MAX_DATA_WORDS:
+            try:
+                raw = bytes(mu.mem_read(addr, 4))
+            except UcError:
+                break
+            names = [labels[a] for a in range(addr, addr + 4) if a in labels]
+            rows.append({
+                "addr": hex(addr),
+                "section": name,
+                "label": ", ".join(names),
+                "value": f"0x{struct.unpack('<I', raw)[0]:08X}",
+                "ascii": "".join(chr(b) if 32 <= b < 127 else "." for b in raw),
+            })
+            addr += 4
+    return rows
+
+
+def send_state_to_dashboard(mu, ws, custom_output=None, is_terminated=False, data_memory=None):
     """
     Legge lo stato corrente dell'emulatore (registri + dump dello stack)
     e lo invia al backend come payload JSON.
@@ -126,6 +182,7 @@ def send_state_to_dashboard(mu, ws, custom_output=None, is_terminated=False):
             "pc": regs["pc"],
             "registers": regs,
             "memory": memory_dump,
+            "data_memory": data_memory or [],
             "status": "terminated" if is_terminated else "running",
             # Un messaggio (stringa), più messaggi (lista) oppure None
             "console_output": custom_output
@@ -173,6 +230,7 @@ class Emulator:
     def __init__(self, elf_path):
         self.mu = Uc(UC_ARCH_ARM, UC_MODE_ARM)
         entry_point, self.loaded = load_program(self.mu, elf_path)
+        self.data_regions, self.data_labels = program_data_info(elf_path)
         self.mu.mem_map(STACK_ADDR, STACK_SIZE)
         self.mu.reg_write(UC_ARM_REG_SP, STACK_ADDR + STACK_SIZE - 4)
         self.mu.reg_write(UC_ARM_REG_PC, entry_point)
@@ -275,6 +333,9 @@ class Emulator:
             return "breakpoint"
         return "count"
 
+    def data_view(self):
+        return data_memory_view(self.mu, self.data_regions, self.data_labels)
+
     def take_messages(self):
         msgs, self.messages = self.messages, []
         return msgs or None
@@ -312,7 +373,8 @@ def main():
         msgs = emu.take_messages() or []
         if extra:
             msgs.insert(0, extra)
-        send_state_to_dashboard(emu.mu, ws, custom_output=msgs or None, is_terminated=emu.terminated)
+        send_state_to_dashboard(emu.mu, ws, custom_output=msgs or None, is_terminated=emu.terminated,
+                                data_memory=emu.data_view())
 
     send("[Unicorn] Stato iniziale caricato e pronto." if emu.loaded else not_compiled)
 

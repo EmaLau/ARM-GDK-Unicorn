@@ -30,6 +30,8 @@ debugger_state = {
     "pc": "0x10000",
     "registers": {f"r{i}": "0x0" for i in range(13)},
     "memory": {},
+    # Parole della sezione .data/.bss: [{"addr", "section", "label", "value", "ascii"}, ...]
+    "data_memory": [],
     "breakpoints": set(),
     "source_code": [],
     "raw_source_text": "",
@@ -40,12 +42,13 @@ debugger_state = {
     "active_regs": set()
 }
 
-# Cache per il rendering differenziale: evita ridisegni inutili dell'UI
-# confrontando lo stato attuale con l'ultimo stato renderizzato.
-_last_rendered_pc = None
-_last_rendered_memory = None
-_last_rendered_logs_len = 0
-_last_rendered_breakpoints = set()
+# Flag di condizione del CPSR: bit, nome e significato (mostrato come suggerimento)
+CPSR_FLAGS = [
+    ("N", 31, "Negative: il risultato dell'ultima operazione con S era negativo (bit 31 = 1)"),
+    ("Z", 30, "Zero: il risultato dell'ultima operazione con S era zero"),
+    ("C", 29, "Carry: riporto in un'addizione, nessun prestito in una sottrazione, o bit uscito da uno shift"),
+    ("V", 28, "oVerflow: overflow con segno (il risultato non sta in 32 bit con segno)"),
+]
 
 # Velocità selezionabili per l'esecuzione continua (istruzioni al secondo, 0 = massima)
 SPEED_OPTIONS = {1: "1 istr/s", 5: "5 istr/s", 20: "20 istr/s", 100: "100 istr/s", 0: "Massima"}
@@ -174,6 +177,8 @@ def handle_backend_message(payload: dict):
             debugger_state["registers"] = data.get("registers", debugger_state["registers"])
         if "memory" in data:
             debugger_state["memory"] = data.get("memory", {})
+        if "data_memory" in data:
+            debugger_state["data_memory"] = data.get("data_memory") or []
 
         # Accoda i messaggi di log nella console dell'UI
         if "console_output" in data and data["console_output"]:
@@ -279,38 +284,45 @@ def index_page():
             ui.label('ARM v7 Integrated Debugger & Editor').classes('text-lg font-black tracking-wider text-slate-100')
 
         with ui.row().classes('items-center gap-4'):
-            # Salva il codice sorgente su disco e lo compila con la toolchain GNU
+            # Salva il codice, lo compila con la toolchain GNU e, se va a buon fine,
+            # il backend lo carica subito nell'emulatore (che riparte dall'inizio)
             ui.button('Salva & Compila', on_click=lambda: background_tasks.create(
                 send_command_to_backend('compile', editor_textarea.value))).props(
                 'flat color=orange icon=build text-xs')
+            unsaved_badge = ui.label('● Modifiche non salvate').classes(
+                'text-amber-400 text-xs font-bold').tooltip(
+                "L'emulatore esegue l'ultima versione compilata: premi 'Salva & Compila' per usare quella nell'editor")
+
+            def warn_if_unsaved():
+                # Continue, Step e Restart non compilano: se l'editor è cambiato lo si ricorda
+                if editor_textarea.value != debugger_state["raw_source_text"]:
+                    debugger_state["console_output"].append(
+                        "[Avviso] L'editor ha modifiche non salvate: l'emulatore esegue l'ultima versione "
+                        "compilata. Premi 'Salva & Compila' per usarle.")
+
+            def run_command(action):
+                warn_if_unsaved()
+                background_tasks.create(send_command_to_backend(action))
 
             with ui.row().classes('bg-slate-800 p-1 rounded-lg border border-slate-700 gap-1'):
 
-                async def handle_continue():
-                    # Prima ricompila per assicurarsi che il binario sia aggiornato, poi riprende
-                    await send_command_to_backend('compile', editor_textarea.value)
-                    await send_command_to_backend('continue')
-
-                btn_run = ui.button('Continue', on_click=lambda: background_tasks.create(handle_continue())).props(
+                btn_run = ui.button('Continue', on_click=lambda: run_command('continue')).props(
                     'flat color=green icon=play_arrow text-xs')
 
-                btn_step = ui.button('Step',
-                                     on_click=lambda: background_tasks.create(send_command_to_backend('step'))).props(
+                btn_step = ui.button('Step', on_click=lambda: run_command('step')).props(
                     'flat color=amber icon=redo text-xs')
 
                 btn_pause = ui.button('Pause',
                                       on_click=lambda: background_tasks.create(send_command_to_backend('pause'))).props(
                     'flat color=red icon=pause text-xs')
 
-                async def handle_restart():
-                    # Ricompila e reinizializza l'emulatore allo stato iniziale
-                    await send_command_to_backend('compile', editor_textarea.value)
+                def handle_restart():
+                    # Riporta all'inizio l'ultimo programma compilato (senza ricompilare)
                     debugger_state["terminated"] = False
-                    debugger_state["pc"] = "0x10000"
                     debugger_state["active_regs"] = set()
-                    await send_command_to_backend('restart')
+                    run_command('restart')
 
-                btn_restart = ui.button('Restart', on_click=lambda: background_tasks.create(handle_restart())).props(
+                btn_restart = ui.button('Restart', on_click=handle_restart).props(
                     'flat color=cyan icon=restart_alt text-xs')
 
             def handle_speed(e):
@@ -411,11 +423,12 @@ def index_page():
                 # Tab 2: Textarea per modificare direttamente il sorgente Assembly
                 with ui.tab_panel(tab_editor).classes('p-0 h-full flex flex-col'):
                     ui.label(
-                        "Modifica direttamente il codice Assembly ARMv7 qui sotto, poi premi 'Salva & Compila':").classes(
+                        "Modifica il codice Assembly ARMv7 qui sotto, poi premi 'Salva & Compila': il programma "
+                        "viene caricato nell'emulatore. Continue, Step e Restart non ricompilano.").classes(
                         'text-slate-400 mb-2 italic')
                     editor_textarea = ui.textarea(value=debugger_state["raw_source_text"]).classes(
                         'w-full flex-grow font-mono bg-slate-900 text-slate-100 p-4 rounded border border-slate-700 focus:border-cyan-500 resize-none h-[440px]'
-                    ).props('square outlined dark')
+                    ).props('square outlined dark input-style="height: 400px; resize: none"')  # area di testo alta quanto il riquadro
 
         # --- Pannello destro: registri CPU e dump dello stack ---
         with ui.column().classes('flex-1 min-w-[350px] gap-4'):
@@ -436,12 +449,29 @@ def index_page():
                             reg_containers[reg] = box
                             reg_labels[reg] = lbl
 
+                # Flag di condizione del CPSR, accesi quando il bit vale 1
+                flag_labels = {}
+                with ui.row().classes('w-full items-center gap-2 mt-3'):
+                    ui.label('Flag').classes('text-slate-400 font-bold uppercase text-[11px] mr-1')
+                    for name, bit, meaning in CPSR_FLAGS:
+                        flag_labels[name] = ui.label(name).classes(
+                            'font-mono font-bold text-xs px-2 py-0.5 rounded border border-slate-600 '
+                            'text-slate-500 bg-slate-900/40').tooltip(f"{meaning} (bit {bit} del CPSR)")
+                    flags_text = ui.label('').classes('text-slate-500 text-[11px] font-mono ml-2')
+
             # Dump dello stack: mostra le word intorno allo Stack Pointer
             with ui.card().classes(
                     'bg-slate-800 border border-slate-700/50 p-4 shadow-xl w-full flex-grow h-[260px] overflow-y-auto'):
                 ui.label('Dump dello Stack (Memoria)').classes(
                     'text-sm font-bold uppercase tracking-wider text-slate-400 mb-2')
                 mem_rows_container = ui.column().classes('w-full gap-1 font-mono text-xs')
+
+            # Memoria della sezione .data (e .bss): parole con etichetta, valore e caratteri
+            with ui.card().classes(
+                    'bg-slate-800 border border-slate-700/50 p-4 shadow-xl w-full h-[240px] overflow-y-auto'):
+                ui.label('Memoria .data').classes(
+                    'text-sm font-bold uppercase tracking-wider text-slate-400 mb-2')
+                data_rows_container = ui.column().classes('w-full gap-1 font-mono text-xs')
 
     # -----------------------------------------------------------------------
     # Footer: console log degli eventi del debugger
@@ -451,8 +481,17 @@ def index_page():
             'text-xs font-bold uppercase tracking-wider text-green-500 mb-2')
         log_column_container = ui.column().classes('w-full gap-0.5 font-mono text-xs max-h-[120px] overflow-y-auto')
 
-    # Versione precedente del sorgente per rilevare cambiamenti che richiedono ridisegno
+    # Cache del ridisegno differenziale, propria di questa scheda: con più schede aperte
+    # ognuna confronta lo stato con quello che ha disegnato lei
     last_src_version = list(debugger_state["source_code"])
+    last_pc = None
+    last_breakpoints = set()
+    last_memory = None
+    last_data_memory = None
+    last_logs_key = None
+    last_cpsr = None
+    # Testo del file salvato quando l'editor di questa scheda è stato sincronizzato
+    editor_base = debugger_state["raw_source_text"]
 
     def update_ui_loop():
         """
@@ -469,8 +508,17 @@ def index_page():
           6. Aggiornamento del dump della memoria
           7. Aggiornamento della console log
         """
-        global _last_rendered_pc, _last_rendered_memory, _last_rendered_logs_len, _last_rendered_breakpoints
-        nonlocal last_src_version
+        nonlocal last_src_version, last_pc, last_breakpoints, last_memory, last_data_memory
+        nonlocal last_logs_key, last_cpsr, editor_base
+
+        # 0. Editor: se il file salvato è cambiato (es. compilato da un'altra scheda) e
+        #    qui non ci sono modifiche in corso, l'editor mostra la nuova versione
+        saved = debugger_state["raw_source_text"]
+        if saved != editor_base:
+            if editor_textarea.value == editor_base:
+                editor_textarea.value = saved
+            editor_base = saved
+        unsaved_badge.set_visibility(editor_textarea.value != saved)
 
         # 1. Ridisegno del sorgente solo se il codice è cambiato
         if debugger_state["source_code"] != last_src_version:
@@ -506,7 +554,7 @@ def index_page():
             btn_pause.enable()
 
         # 5. Evidenziazione del PC corrente e dei breakpoint nel sorgente (solo se cambiati)
-        if current_pc_str != _last_rendered_pc or debugger_state["breakpoints"] != _last_rendered_breakpoints:
+        if current_pc_str != last_pc or debugger_state["breakpoints"] != last_breakpoints:
             for r_ui in code_ui_rows:
                 is_current = (r_ui["pc_addr"] == current_pc_str and r_ui["is_instruction"])
                 is_bp = r_ui["pc_addr"] in debugger_state["breakpoints"]
@@ -531,11 +579,11 @@ def index_page():
                     else:
                         r_ui["bp_btn"].classes('bg-slate-800 opacity-20',
                                                remove='bg-red-600 shadow-[0_0_8px_rgba(220,38,38,0.7)] opacity-100')
-            _last_rendered_pc = current_pc_str
-            _last_rendered_breakpoints = set(debugger_state["breakpoints"])
+            last_pc = current_pc_str
+            last_breakpoints = set(debugger_state["breakpoints"])
 
         # 6. Aggiornamento del dump della memoria (solo se il contenuto è cambiato)
-        if debugger_state["memory"] != _last_rendered_memory:
+        if debugger_state["memory"] != last_memory:
             mem_rows_container.clear()
             # Ordine decrescente per indirizzo: la cima dello stack appare in alto
             sorted_memory = sorted(debugger_state["memory"].items(), key=lambda x: int(x[0], 16), reverse=True)
@@ -545,12 +593,47 @@ def index_page():
                             'justify-between w-full border-b border-slate-700/30 py-0.5 px-2 hover:bg-slate-800/50'):
                         ui.label(addr).classes('text-cyan-400 font-bold')
                         ui.label(str(val)).classes('text-slate-100 font-bold')
-            _last_rendered_memory = dict(debugger_state["memory"])
+            last_memory = dict(debugger_state["memory"])
+
+        # 6b. Memoria .data (solo se cambiata)
+        if debugger_state["data_memory"] != last_data_memory:
+            data_rows_container.clear()
+            with data_rows_container:
+                if not debugger_state["data_memory"]:
+                    ui.label('Il programma non ha dati in .data o .bss.').classes('text-slate-500 italic')
+                for row in debugger_state["data_memory"]:
+                    with ui.row().classes(
+                            'w-full items-center gap-3 border-b border-slate-700/30 py-0.5 px-2 hover:bg-slate-800/50'):
+                        ui.label(row["addr"]).classes('text-cyan-400 font-bold w-20')
+                        ui.label(row["label"]).classes('text-amber-300 font-bold w-16 truncate')
+                        ui.label(row["value"]).classes('text-slate-100 font-bold')
+                        ui.label(row["ascii"]).classes('text-slate-500 whitespace-pre')
+            last_data_memory = list(debugger_state["data_memory"])
+
+        # 6c. Flag del CPSR
+        cpsr_str = debugger_state["registers"].get("cpsr", "0x0")
+        if cpsr_str != last_cpsr:
+            try:
+                cpsr = int(cpsr_str, 16)
+            except (TypeError, ValueError):
+                cpsr = 0
+            active = []
+            for name, bit, _ in CPSR_FLAGS:
+                on = bool(cpsr >> bit & 1)
+                if on:
+                    active.append(name)
+                    flag_labels[name].classes('text-slate-900 bg-emerald-400 border-emerald-300',
+                                              remove='text-slate-500 bg-slate-900/40 border-slate-600')
+                else:
+                    flag_labels[name].classes('text-slate-500 bg-slate-900/40 border-slate-600',
+                                              remove='text-slate-900 bg-emerald-400 border-emerald-300')
+            flags_text.set_text(" ".join(active) if active else "nessun flag attivo")
+            last_cpsr = cpsr_str
 
         # 7. Aggiornamento della console log (solo se sono arrivati nuovi messaggi)
         logs = debugger_state["console_output"]
         logs_key = (len(logs), id(logs[-1]) if logs else None)
-        if logs_key != _last_rendered_logs_len:
+        if logs_key != last_logs_key:
             log_column_container.clear()
             with log_column_container:
                 # Mostra solo gli ultimi 12 messaggi per non sovraffollare la console
@@ -574,7 +657,7 @@ def index_page():
                         c = 'text-slate-400'
                     # whitespace-pre-wrap: spazi e a capo dell'output del programma restano visibili
                     ui.label(f" {msg}").classes(c + ' whitespace-pre-wrap')
-            _last_rendered_logs_len = logs_key
+            last_logs_key = logs_key
 
     # Avvia il loop di aggiornamento dell'UI a 10 fps (100ms)
     ui.timer(0.1, update_ui_loop)
