@@ -1,7 +1,7 @@
 # app/emulator/unicorn_worker.py
 # Worker dell'emulatore ARMv7 basato su Unicorn Engine.
 # Si connette al backend FastAPI via WebSocket (/telemetry),
-# riceve comandi di controllo (step, continue, pause, restart)
+# riceve comandi di controllo (step, continue, pause, restart, set_speed)
 # e invia lo stato dell'emulatore (registri, memoria, output) al backend.
 
 import json
@@ -19,8 +19,6 @@ from unicorn.arm_const import *
 sys.path.append(str(Path(__file__).resolve().parent.parent.parent))
 from app.paths import BUILD_ELF
 
-# Indirizzo sentinella: se il PC raggiunge questo valore il programma è terminato
-EXIT_SENTINEL = 0xFFFF0000
 # Indirizzo base di caricamento del codice (deve coincidere con ARMCompiler.CODE_ADDRESS)
 CODE_ADDRESS = 0x10000
 
@@ -126,6 +124,7 @@ def send_state_to_dashboard(mu, ws, custom_output=None, is_terminated=False):
             "registers": regs,
             "memory": memory_dump,
             "status": "terminated" if is_terminated else "running",
+            # Un messaggio (stringa), più messaggi (lista) oppure None
             "console_output": custom_output
         }
         ws.send(json.dumps(payload))
@@ -133,83 +132,149 @@ def send_state_to_dashboard(mu, ws, custom_output=None, is_terminated=False):
         print(f"[Unicorn] Errore invio telemetria: {e}")
 
 
+# Stack: 64 KB a partire da 0x70000000; SP parte dalla word più alta (full-descending)
+STACK_ADDR, STACK_SIZE = 0x70000000, 0x10000
+
+# Chiamate di sistema Linux ARM (EABI): numero in r7, argomenti in r0-r2, risultato in r0
+SYS_EXIT, SYS_WRITE, SYS_EXIT_GROUP = 1, 4, 248
+EBADF, ENOSYS = 9, 38
+
+# Esecuzione continua: ogni "tick" legge i comandi, esegue un blocco di istruzioni
+# e invia un solo aggiornamento all'interfaccia (al massimo 20 al secondo).
+TICK = 0.05
+MAX_BLOCK = 20_000          # istruzioni per tick alla velocità massima
+DEFAULT_SPEED = 5           # istruzioni al secondo all'avvio (0 = massima)
+
+
 def execute_single_step(mu):
     """
-    Esegue esattamente una istruzione ARM (4 byte) partendo dal PC corrente.
+    Esegue esattamente una istruzione ARM partendo dal PC corrente.
 
     Parametri:
         mu -- istanza Unicorn
     """
     current_pc = mu.reg_read(UC_ARM_REG_PC)
-    mu.emu_start(current_pc, current_pc + 4, timeout=0, count=1)
+    mu.emu_start(current_pc, 0xFFFFFFFF, timeout=0, count=1)
 
 
-def build_emulator(ws, elf_path):
+class Emulator:
     """
-    Crea e configura una nuova istanza dell'emulatore Unicorn ARMv7.
+    Un programma caricato in Unicorn, con chiamate di sistema e breakpoint.
 
-    Operazioni:
-      1. Crea l'istanza Unicorn in modalità ARM a 32 bit
-      2. Carica l'ELF in memoria (segmenti PT_LOAD)
-      3. Mappa e inizializza lo stack (64 KB a partire da 0x70000000)
-      4. Imposta SP alla cima dello stack e PC all'entry point
-      5. Registra l'hook per le syscall SVC (interrupt software)
-
-    Syscall supportate (valore in r7):
-      1 (exit)  -- termina l'emulazione e notifica la UI
-      4 (write) -- legge la stringa da memoria e la invia come output
-
-    Parametri:
-        ws       -- connessione WebSocket per l'invio della telemetria
-        elf_path -- percorso dell'ELF da caricare
-
-    Ritorna:
-        (mu, caricato) -- istanza Unicorn pronta; caricato è False se manca il programma
+    run(n) esegue fino a n istruzioni e si ferma prima se il programma chiama
+    exit, se raggiunge un breakpoint (prima di eseguire l'istruzione) o se la CPU
+    solleva un'eccezione. I messaggi per la console si accumulano in
+    self.messages e vengono inviati dal ciclo principale insieme allo stato.
     """
-    mu = Uc(UC_ARCH_ARM, UC_MODE_ARM)
-    entry_point, loaded = load_program(mu, elf_path)
 
-    # Alloca lo stack: 64 KB a partire dall'indirizzo 0x70000000
-    STACK_ADDR, STACK_SIZE = 0x70000000, 0x10000
-    try:
-        mu.mem_map(STACK_ADDR, STACK_SIZE)
-    except UcError:
-        pass  # Già mappato in caso di restart
-    # SP punta alla word più alta dello stack (convenzione ARM full-descending)
-    mu.reg_write(UC_ARM_REG_SP, STACK_ADDR + STACK_SIZE - 4)
-    mu.reg_write(UC_ARM_REG_PC, entry_point)
+    def __init__(self, elf_path):
+        self.mu = Uc(UC_ARCH_ARM, UC_MODE_ARM)
+        entry_point, self.loaded = load_program(self.mu, elf_path)
+        self.mu.mem_map(STACK_ADDR, STACK_SIZE)
+        self.mu.reg_write(UC_ARM_REG_SP, STACK_ADDR + STACK_SIZE - 4)
+        self.mu.reg_write(UC_ARM_REG_PC, entry_point)
 
-    def hook_intr(uc, intno, user_data):
-        """
-        Hook chiamato da Unicorn ad ogni interrupt software (SVC).
-        Intercetta solo le syscall Linux ARMv7 (intno == 2).
-        """
-        if intno != 2:
-            return  # Ignora altri tipi di interrupt
+        self.breakpoints = set()   # indirizzi interi
+        self.terminated = False    # exit chiamata o eccezione della CPU
+        self.exit_code = None
+        self.messages = []
+        self._first_instruction = False
+        self._hit_breakpoint = None
 
-        r7 = uc.reg_read(UC_ARM_REG_R7)  # Numero della syscall
-        r0 = uc.reg_read(UC_ARM_REG_R0)  # Primo argomento
+        self.mu.hook_add(UC_HOOK_INTR, self._on_interrupt)
+        self.mu.hook_add(UC_HOOK_CODE, self._on_code)
 
-        if r7 == 1:
-            # Syscall exit(r0): comunica la terminazione alla UI e ferma l'emulatore
-            msg = f"[Output Emulatore] Syscall exit({r0}) intercettata."
-            send_state_to_dashboard(uc, ws, custom_output=msg, is_terminated=True)
+    @property
+    def pc(self):
+        return self.mu.reg_read(UC_ARM_REG_PC)
+
+    def set_breakpoints(self, addresses):
+        """Accetta indirizzi come stringhe esadecimali ('0x10004') o interi."""
+        result = set()
+        for a in addresses:
+            try:
+                result.add(int(a, 16) if isinstance(a, str) else int(a))
+            except ValueError:
+                pass
+        self.breakpoints = result
+
+    # --- hook di Unicorn ---------------------------------------------------
+
+    def _on_code(self, uc, address, size, user_data):
+        # La prima istruzione di ogni run() viene sempre eseguita: si può ripartire
+        # da un breakpoint senza fermarsi subito sullo stesso indirizzo.
+        if self._first_instruction:
+            self._first_instruction = False
+            return
+        if address in self.breakpoints:
+            self._hit_breakpoint = address
+            uc.emu_stop()   # si ferma prima di eseguire l'istruzione
+
+    def _on_interrupt(self, uc, intno, user_data):
+        if intno != 2:      # 2 = SVC (chiamata di sistema)
+            return
+        r7 = uc.reg_read(UC_ARM_REG_R7)
+        r0 = uc.reg_read(UC_ARM_REG_R0)
+
+        if r7 in (SYS_EXIT, SYS_EXIT_GROUP):
+            code = r0 if r0 < 0x80000000 else r0 - 0x100000000   # r0 con segno
+            self.exit_code = r0
+            self.terminated = True
+            self.messages.append(f"[Fine Esecuzione] Il programma ha chiamato exit({code}).")
             uc.emu_stop()
 
-        elif r7 == 4:
-            # Syscall write(r0=fd, r1=buf, r2=len): legge la stringa dal buffer e la stampa
-            r1 = uc.reg_read(UC_ARM_REG_R1)  # Puntatore al buffer
-            r2 = uc.reg_read(UC_ARM_REG_R2)  # Numero di byte da leggere
+        elif r7 == SYS_WRITE:
+            buf, length = uc.reg_read(UC_ARM_REG_R1), uc.reg_read(UC_ARM_REG_R2)
+            if r0 not in (1, 2):
+                self.messages.append(f"[Avviso] write sul file descriptor {r0}: sono supportati solo 1 (stdout) e 2 (stderr).")
+                uc.reg_write(UC_ARM_REG_R0, (-EBADF) & 0xFFFFFFFF)
+                return
             try:
-                buf = uc.mem_read(r1, r2)
-                decoded_str = buf.decode('utf-8', errors='ignore').strip()
-                msg = f"[Output Emulatore]: {decoded_str}"
-                send_state_to_dashboard(uc, ws, custom_output=msg)
+                data = bytes(uc.mem_read(buf, length))
             except UcError:
-                pass  # Il buffer punta a memoria non mappata
+                self.messages.append(f"[Avviso] write: il buffer {hex(buf)} non è in memoria.")
+                uc.reg_write(UC_ARM_REG_R0, (-14) & 0xFFFFFFFF)   # -EFAULT
+                return
+            text = data.decode("utf-8", errors="replace")
+            # Ogni messaggio è già una riga della console: si toglie solo l'a capo finale
+            if text.endswith("\n"):
+                text = text[:-1]
+            label = "[Output Emulatore]" if r0 == 1 else "[Output Emulatore stderr]"
+            self.messages.append(f"{label} {text}")
+            uc.reg_write(UC_ARM_REG_R0, length)   # come Linux: numero di byte scritti
 
-    mu.hook_add(UC_HOOK_INTR, hook_intr)
-    return mu, loaded
+        else:
+            self.messages.append(f"[Avviso] Chiamata di sistema {r7} non supportata: ignorata (r0 = -ENOSYS).")
+            uc.reg_write(UC_ARM_REG_R0, (-ENOSYS) & 0xFFFFFFFF)
+
+    # --- esecuzione ----------------------------------------------------------
+
+    def run(self, count):
+        """
+        Esegue fino a count istruzioni.
+
+        Ritorna il motivo della fermata: 'count', 'exit', 'breakpoint' o 'error'.
+        """
+        if self.terminated:
+            return "exit"
+        self._first_instruction = True
+        self._hit_breakpoint = None
+        try:
+            self.mu.emu_start(self.pc, 0xFFFFFFFF, timeout=0, count=count)
+        except UcError as e:
+            self.terminated = True
+            self.messages.append(f"[Fine Esecuzione] Eccezione della CPU a {hex(self.pc)}: {e}")
+            return "error"
+        if self.terminated:
+            return "exit"
+        if self._hit_breakpoint is not None:
+            self.messages.append(f"[Breakpoint] Raggiunto indirizzo {hex(self._hit_breakpoint)}")
+            return "breakpoint"
+        return "count"
+
+    def take_messages(self):
+        msgs, self.messages = self.messages, []
+        return msgs or None
 
 
 def main():
@@ -218,111 +283,96 @@ def main():
 
     1. Carica build/main.elf (o una pagina vuota se non è ancora stato compilato).
     2. Si connette al backend via WebSocket (ws://127.0.0.1:8001/telemetry).
-    3. Entra in un loop che:
-       a. Legge eventuali comandi dal backend (con timeout di 50ms)
-       b. Se is_running, esegue un singolo step, aggiorna breakpoint
-          e invia la telemetria al backend.
-       c. Introduce un delay di 150ms tra i passi per permettere alla UI di aggiornare.
+    3. A ogni tick (50 ms) legge i comandi; se l'esecuzione continua è attiva
+       esegue un blocco di istruzioni in base alla velocità scelta e invia un
+       solo aggiornamento dello stato.
     """
     elf_path = BUILD_ELF
-    breakpoints = set()
     not_compiled = "[Unicorn] Nessun programma compilato: correggi il codice e premi 'Salva & Compila'."
 
     print("[Unicorn] Connessione al server centrale...")
     try:
         ws = websocket.create_connection("ws://127.0.0.1:8001/telemetry")
-        ws.settimeout(0.05)  # Timeout breve per non bloccare il loop principale
+        ws.settimeout(TICK)  # il timeout di ricezione fa da ritmo al ciclo
         print("[Unicorn] Connessione stabilita con successo.")
     except Exception as e:
         print(f"Errore connessione: {e}")
         return
 
-    mu, loaded = build_emulator(ws, elf_path)
-    is_running = False    # True quando l'esecuzione continua è attiva
-    has_terminated = False  # True dopo aver raggiunto il punto di terminazione
+    emu = Emulator(elf_path)
+    breakpoints = []
+    speed = DEFAULT_SPEED       # istruzioni al secondo; 0 = massima
+    is_running = False
+    credit, last_tick = 0.0, time.monotonic()
 
-    # Invia lo stato iniziale così la UI mostra i valori dei registri prima di qualsiasi step
-    send_state_to_dashboard(mu, ws, custom_output="[Unicorn] Stato iniziale caricato e pronto." if loaded
-                            else not_compiled)
+    def send(extra=None):
+        msgs = emu.take_messages() or []
+        if extra:
+            msgs.insert(0, extra)
+        send_state_to_dashboard(emu.mu, ws, custom_output=msgs or None, is_terminated=emu.terminated)
+
+    send("[Unicorn] Stato iniziale caricato e pronto." if emu.loaded else not_compiled)
 
     while True:
-        # --- Fase 1: ricezione dei comandi dal backend ---
+        # --- Fase 1: comandi dal backend ---
         try:
-            msg = ws.recv()
-            cmd_data = json.loads(msg)
+            cmd_data = json.loads(ws.recv())
             if cmd_data.get("type") == "COMMAND":
                 action = cmd_data.get("action")
-
-                # Aggiorna sempre i breakpoint se presenti nel payload
                 if "breakpoints" in cmd_data:
-                    breakpoints = set(cmd_data["breakpoints"])
+                    breakpoints = cmd_data["breakpoints"]
+                    emu.set_breakpoints(breakpoints)
+                if "speed" in cmd_data:
+                    try:
+                        speed = max(0, int(cmd_data["speed"]))
+                    except (TypeError, ValueError):
+                        pass
 
                 if action == "restart":
-                    # Reimposta lo stato e ricrea l'emulatore da zero
-                    is_running, has_terminated = False, False
-                    mu, loaded = build_emulator(ws, elf_path)
-                    send_state_to_dashboard(mu, ws, custom_output="[Restart] Emulatore resettato." if loaded
-                                            else not_compiled)
-                    continue
-
-                # Se il programma è già terminato, risponde comunque con lo stato finale
-                if has_terminated:
-                    send_state_to_dashboard(mu, ws, is_terminated=True)
-                    continue
-
-                if action == "step":
-                    # Esegue un singolo passo e ferma l'esecuzione continua
                     is_running = False
-                    try:
-                        execute_single_step(mu)
-                        send_state_to_dashboard(mu, ws)
-                    except UcError:
-                        has_terminated = True
-                        send_state_to_dashboard(mu, ws, custom_output="[Fine Esecuzione] Eccezione CPU.",
-                                                is_terminated=True)
+                    emu = Emulator(elf_path)
+                    emu.set_breakpoints(breakpoints)
+                    send("[Restart] Emulatore resettato." if emu.loaded else not_compiled)
+
+                elif emu.terminated and action in ("step", "continue"):
+                    # Programma finito: si risponde con lo stato finale, senza eseguire altro
+                    send("[Sistema] Il programma è terminato: premi Restart per ricominciare.")
+
+                elif action == "step":
+                    is_running = False
+                    emu.run(1)
+                    send()
 
                 elif action == "continue":
-                    is_running = True  # Avvia l'esecuzione continua
+                    is_running = True
+                    credit, last_tick = 1.0, time.monotonic()   # la prima istruzione parte subito
 
                 elif action == "pause":
-                    is_running = False
-                    send_state_to_dashboard(mu, ws, custom_output="[Sistema] Esecuzione in pausa.")
+                    if is_running:
+                        is_running = False
+                        send("[Sistema] Esecuzione in pausa.")
 
         except websocket.WebSocketTimeoutException:
-            pass  # Nessun comando disponibile: prosegue con l'esecuzione continua
+            pass  # nessun comando: si prosegue con l'esecuzione continua
         except Exception:
-            break  # Errore di connessione: termina il worker
+            break  # connessione persa: termina il worker
 
-        # --- Fase 2: esecuzione continua (un passo per iterazione) ---
-        if is_running and not has_terminated:
-            try:
-                execute_single_step(mu)
-                current_pc = mu.reg_read(UC_ARM_REG_PC)
-                current_pc_hex = hex(current_pc)
+        # --- Fase 2: esecuzione continua, un blocco per tick ---
+        if is_running and not emu.terminated:
+            now = time.monotonic()
+            if speed == 0:
+                budget = MAX_BLOCK
+            else:
+                credit = min(credit + speed * (now - last_tick), speed + 1.0)
+                budget = int(credit)
+                credit -= budget
+            last_tick = now
 
-                if current_pc_hex in breakpoints:
-                    # Breakpoint raggiunto: sospende l'esecuzione e notifica la UI
+            if budget > 0:
+                reason = emu.run(budget)
+                if reason != "count":
                     is_running = False
-                    send_state_to_dashboard(mu, ws, custom_output=f"[Breakpoint] Raggiunto indirizzo {current_pc_hex}")
-
-                elif current_pc == EXIT_SENTINEL:
-                    # Istruzione sentinella di fine programma
-                    is_running, has_terminated = False, True
-                    send_state_to_dashboard(mu, ws,
-                                            custom_output="[Fine Esecuzione] Raggiunta istruzione di terminazione.",
-                                            is_terminated=True)
-                else:
-                    # Passo normale: invia la telemetria aggiornata
-                    send_state_to_dashboard(mu, ws)
-
-            except UcError:
-                # Eccezione CPU (accesso a memoria non valida, istruzione illegale, ecc.)
-                is_running, has_terminated = False, True
-                send_state_to_dashboard(mu, ws, custom_output="[Fine Esecuzione] Programma terminato.",
-                                        is_terminated=True)
-
-            # Rallenta l'esecuzione continua per permettere aggiornamenti fluidi della UI
-            time.sleep(0.15)
+                send()
 
 
 if __name__ == "__main__":

@@ -221,17 +221,21 @@ Basato su:
 
 Funzionalità:
 
-* Esecuzione ARMv7
-* Step-by-step execution
-* Gestione breakpoint
-* Hook syscall Linux
+* Esecuzione ARMv7 dell'ELF prodotto dal compilatore, a partire da `_start`
+* Esecuzione passo passo (Step)
+* Esecuzione continua (Continue) a blocchi, con velocità regolabile dall'interfaccia: da 1 istruzione al secondo, per seguire il programma riga per riga, fino alla velocità massima
+* Breakpoint: l'esecuzione si ferma *prima* di eseguire l'istruzione marcata; premendo di nuovo Continue riparte da lì
+* Fine del programma: dopo `exit` (o un'eccezione della CPU, con indirizzo e motivo) non viene eseguita nessun'altra istruzione fino a Restart
 
-Syscall supportate:
+Chiamate di sistema Linux supportate (numero in `r7`, argomenti in `r0`-`r2`, risultato in `r0`):
 
-| Syscall | Descrizione |
-| ------- | ----------- |
-| 1       | exit        |
-| 4       | write       |
+| Numero | Chiamata     | Comportamento |
+| ------ | ------------ | ------------- |
+| 1      | `exit`       | termina il programma con il codice in `r0` |
+| 4      | `write`      | scrive il buffer `r1` di `r2` byte su stdout (`r0` = 1) o stderr (`r0` = 2), conservando spazi e tabulazioni; restituisce in `r0` il numero di byte scritti, oppure `-EBADF` per altri file descriptor |
+| 248    | `exit_group` | come `exit` |
+
+Le altre chiamate restituiscono `-ENOSYS` in `r0` e mostrano un avviso nella console.
 
 ---
 
@@ -319,7 +323,7 @@ I test compilano ed eseguono nell'emulatore una serie di programmi (cicli, funzi
 4. Eseguire:
 
    * Step
-   * Run
+   * Continue, scegliendo la velocità nel menu *Velocità*
    * Pause
 5. Analizzare:
 

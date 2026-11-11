@@ -30,6 +30,8 @@ debugger_state = {
     "raw_source_text": "",
     "console_output": ["[Sistema] Debugger pronto. In attesa del Backend centrale..."],
     "terminated": False,
+    # Velocità dell'esecuzione continua in istruzioni al secondo (0 = massima)
+    "speed": 5,
     "active_regs": set()
 }
 
@@ -40,8 +42,8 @@ _last_rendered_memory = None
 _last_rendered_logs_len = 0
 _last_rendered_breakpoints = set()
 
-# Valore sentinella che indica la fine dell'esecuzione (indirizzo non valido)
-EXIT_SENTINEL = 0xFFFF0000
+# Velocità selezionabili per l'esecuzione continua (istruzioni al secondo, 0 = massima)
+SPEED_OPTIONS = {1: "1 istr/s", 5: "5 istr/s", 20: "20 istr/s", 100: "100 istr/s", 0: "Massima"}
 # Copia di lavoro del sorgente Assembly (workspace/main.s, creata dall'esempio se manca)
 SRC_FILE_PATH = ensure_workspace()
 
@@ -65,7 +67,8 @@ async def send_command_to_backend(action: str, current_code: str = None):
         payload = {
             "type": "SEND_COMMAND",
             "action": action,
-            "breakpoints": list(debugger_state["breakpoints"])
+            "breakpoints": list(debugger_state["breakpoints"]),
+            "speed": debugger_state["speed"]
         }
         if current_code is not None:
             payload["code"] = current_code
@@ -207,14 +210,10 @@ async def maintain_backend_connection():
                                 debugger_state["active_regs"] = analizza_registri_attivi(row["text"])
                                 break
 
-                        # Aggiorna il flag di terminazione in base allo status ricevuto
-                        if data.get("status") == "terminated" or data.get("terminated"):
-                            debugger_state["terminated"] = True
-                        else:
-                            try:
-                                debugger_state["terminated"] = int(debugger_state["pc"], 16) == EXIT_SENTINEL
-                            except ValueError:
-                                pass
+                        # Lo stato di terminazione lo decide solo l'emulatore: i messaggi del
+                        # compilatore (CONSOLE_LOG) non hanno 'status' e non lo cambiano
+                        if "status" in data:
+                            debugger_state["terminated"] = data["status"] == "terminated"
 
                         # Ricarica il sorgente per riflettere eventuali modifiche salvate
                         debugger_state["source_code"] = load_source_code()
@@ -290,6 +289,14 @@ def index_page():
 
                 btn_restart = ui.button('Restart', on_click=lambda: background_tasks.create(handle_restart())).props(
                     'flat color=cyan icon=restart_alt text-xs')
+
+            def handle_speed(e):
+                # La nuova velocità vale subito, anche durante l'esecuzione continua
+                debugger_state["speed"] = e.value
+                background_tasks.create(send_command_to_backend('set_speed'))
+
+            ui.select(SPEED_OPTIONS, value=debugger_state["speed"], label='Velocità',
+                      on_change=handle_speed).props('dense dark options-dense').classes('w-32 text-xs')
 
             # Etichetta che mostra il valore aggiornato del Program Counter
             pc_label = ui.label("PC: 0x10000").classes(
@@ -510,17 +517,21 @@ def index_page():
             _last_rendered_memory = dict(debugger_state["memory"])
 
         # 7. Aggiornamento della console log (solo se sono arrivati nuovi messaggi)
-        if len(debugger_state["console_output"]) != _last_rendered_logs_len:
+        logs = debugger_state["console_output"]
+        logs_key = (len(logs), id(logs[-1]) if logs else None)
+        if logs_key != _last_rendered_logs_len:
             log_column_container.clear()
             with log_column_container:
                 # Mostra solo gli ultimi 12 messaggi per non sovraffollare la console
                 for msg in debugger_state["console_output"][-12:]:
                     # Colore del messaggio in base alla categoria
-                    if '[Output Emulatore]' in msg or '[Compiler SUCCESS]' in msg:
+                    if '[Output Emulatore' in msg or '[Compiler SUCCESS]' in msg:
                         c = 'text-green-400 font-bold'
-                    elif '[Fine Esecuzione]' in msg or '[Compiler Errore]' in msg:
+                    elif 'Eccezione' in msg or '[Compiler Errore]' in msg:
                         c = 'text-red-400 font-bold'
-                    elif '[Compiler Avviso]' in msg:
+                    elif '[Fine Esecuzione]' in msg:
+                        c = 'text-sky-400 font-bold'
+                    elif '[Compiler Avviso]' in msg or '[Avviso]' in msg:
                         c = 'text-amber-400 font-bold'
                     elif '[Breakpoint]' in msg:
                         c = 'text-amber-400 font-bold'
@@ -530,8 +541,9 @@ def index_page():
                         c = 'text-purple-400 font-bold'
                     else:
                         c = 'text-slate-400'
-                    ui.label(f" {msg}").classes(c)
-            _last_rendered_logs_len = len(debugger_state["console_output"])
+                    # whitespace-pre-wrap: spazi e a capo dell'output del programma restano visibili
+                    ui.label(f" {msg}").classes(c + ' whitespace-pre-wrap')
+            _last_rendered_logs_len = logs_key
 
     # Avvia il loop di aggiornamento dell'UI a 10 fps (100ms)
     ui.timer(0.1, update_ui_loop)

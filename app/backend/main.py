@@ -63,6 +63,7 @@ async def ui_endpoint(websocket: WebSocket):
       pause            -- metti in pausa l'esecuzione
       restart          -- reimposta l'emulatore allo stato iniziale
       update_breakpoints -- aggiorna la lista dei breakpoint nell'emulatore
+      set_speed        -- imposta la velocità dell'esecuzione continua (campo 'speed', 0 = massima)
 
     Risponde con messaggi JSON di tipo CONSOLE_LOG per gli esiti della compilazione.
     Per tutti gli altri comandi, il payload viene inoltrato direttamente all'emulatore.
@@ -89,11 +90,11 @@ async def ui_endpoint(websocket: WebSocket):
                 # Tutti gli altri comandi vengono inoltrati all'emulatore Unicorn
                 if unicorn_socket:
                     try:
-                        await unicorn_socket.send_json({
-                            "type": "COMMAND",
-                            "action": action,
-                            "breakpoints": data.get("breakpoints", [])
-                        })
+                        # Inoltra il comando con i suoi parametri (breakpoint, velocità…)
+                        command = {k: v for k, v in data.items() if k not in ("type", "code")}
+                        command["type"] = "COMMAND"
+                        command.setdefault("breakpoints", [])
+                        await unicorn_socket.send_json(command)
                     except Exception:
                         # Se l'invio fallisce l'emulatore si è probabilmente disconnesso
                         unicorn_socket = None

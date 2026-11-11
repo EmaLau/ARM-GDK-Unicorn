@@ -5,21 +5,11 @@
 # Uso:  python -m unittest discover -s tests -v   (dalla cartella del progetto)
 # Se la toolchain GNU per ARM non è installata i test vengono saltati.
 
-import shutil
-import sys
-import tempfile
 import types
 import unittest
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT))
+from support import ROOT, CompilerFixture, core_compiler
 
-# Il worker importa websocket-client: per i test basta un modulo finto
-sys.modules.setdefault("websocket", types.ModuleType("websocket"))
-
-import app.backend.core_compiler as core_compiler  # noqa: E402
-import app.paths as paths  # noqa: E402
 from app.emulator import unicorn_worker as worker  # noqa: E402
 from app.toolchain import find_toolchain  # noqa: E402
 from unicorn import Uc, UcError, UC_ARCH_ARM, UC_MODE_ARM, UC_HOOK_INTR  # noqa: E402
@@ -30,31 +20,7 @@ MAX_STEPS = 10_000
 
 
 @unittest.skipUnless(find_toolchain(), "toolchain GNU per ARM non installata")
-class CompilerTest(unittest.TestCase):
-
-    def setUp(self):
-        # Ogni test lavora in una cartella temporanea: workspace/ e build/ del progetto restano intatti
-        self.tmp = Path(tempfile.mkdtemp())
-        (self.tmp / "workspace").mkdir()
-        self.patches = {
-            (paths, "WORKSPACE_SRC"): self.tmp / "workspace" / "main.s",
-            (core_compiler, "BUILD_DIR"): self.tmp / "build",
-            (core_compiler, "BUILD_OBJ"): self.tmp / "build" / "main.o",
-            (core_compiler, "BUILD_ELF"): self.tmp / "build" / "main.elf",
-            (core_compiler, "BUILD_LINES"): self.tmp / "build" / "lines.json",
-        }
-        self.saved = {k: getattr(*k) for k in self.patches}
-        for (mod, name), value in self.patches.items():
-            setattr(mod, name, value)
-        (self.tmp / "workspace" / "main.s").touch()
-        self.compiler = core_compiler.ARMCompiler(self.tmp)
-        self.compiler.src_path = self.tmp / "workspace" / "main.s"
-        self.compiler.elf_path = self.tmp / "build" / "main.elf"
-
-    def tearDown(self):
-        for (mod, name), value in self.saved.items():
-            setattr(mod, name, value)
-        shutil.rmtree(self.tmp, ignore_errors=True)
+class CompilerTest(CompilerFixture, unittest.TestCase):
 
     def run_program(self, source):
         """Compila ed esegue fino a exit; restituisce (r0 all'uscita, output di write, registri)."""
