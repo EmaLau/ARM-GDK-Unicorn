@@ -5,6 +5,7 @@
 # e invia lo stato dell'emulatore (registri, memoria, output) al backend.
 
 import json
+import logging
 import struct
 import sys
 import time
@@ -18,6 +19,8 @@ from unicorn.arm_const import *
 # Aggiunge la root del progetto al path per importare i percorsi condivisi
 sys.path.append(str(Path(__file__).resolve().parent.parent.parent))
 from app.paths import BUILD_ELF
+
+log = logging.getLogger("emulatore")
 
 # Indirizzo base di caricamento del codice (deve coincidere con ARMCompiler.CODE_ADDRESS)
 CODE_ADDRESS = 0x10000
@@ -129,7 +132,7 @@ def send_state_to_dashboard(mu, ws, custom_output=None, is_terminated=False):
         }
         ws.send(json.dumps(payload))
     except Exception as e:
-        print(f"[Unicorn] Errore invio telemetria: {e}")
+        log.warning("Invio dello stato al backend fallito: %s", e)
 
 
 # Stack: 64 KB a partire da 0x70000000; SP parte dalla word più alta (full-descending)
@@ -296,7 +299,7 @@ def main():
         ws.settimeout(TICK)  # il timeout di ricezione fa da ritmo al ciclo
         print("[Unicorn] Connessione stabilita con successo.")
     except Exception as e:
-        print(f"Errore connessione: {e}")
+        log.error("Impossibile collegarsi al backend su ws://127.0.0.1:8001/telemetry: %s", e)
         return
 
     emu = Emulator(elf_path)
@@ -354,8 +357,14 @@ def main():
 
         except websocket.WebSocketTimeoutException:
             pass  # nessun comando: si prosegue con l'esecuzione continua
+        except (OSError, getattr(websocket, "WebSocketException", OSError)) as e:
+            log.info("Connessione con il backend chiusa (%s): l'emulatore si ferma", e)
+            break
         except Exception:
-            break  # connessione persa: termina il worker
+            # Un errore inatteso nella gestione di un comando: lo si registra con il
+            # traceback invece di nasconderlo, poi l'emulatore si ferma
+            log.exception("Errore inatteso nel ciclo dell'emulatore")
+            break
 
         # --- Fase 2: esecuzione continua, un blocco per tick ---
         if is_running and not emu.terminated:
@@ -376,4 +385,5 @@ def main():
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     main()

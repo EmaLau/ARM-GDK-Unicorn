@@ -1,7 +1,9 @@
-fastapi
-uvicorn
-nicegui
-websockets
-unicorn
-websocket-client
-pyelftools
+# Versioni provate insieme (Python 3.11 o successivo). La toolchain GNU per ARM
+# si installa a parte: vedi il README.
+fastapi==0.162.4
+uvicorn==0.54.0
+nicegui==4.0.0
+websockets==17.4
+unicorn==2.1.4
+websocket-client==1.9.2
+pyelftools==0.33

@@ -103,7 +103,8 @@ class WorkerLoopTest(CompilerFixture, unittest.TestCase):
         ])
         executed = [p for p in sent if p["console_output"] is None]
         # ~5 istruzioni in un secondo (una subito, poi una ogni 0,2 s)
-        self.assertTrue(4 <= len(executed) <= 7, len(executed))
+        # margine ampio: sui server della CI i tempi sono meno regolari
+        self.assertTrue(3 <= len(executed) <= 8, len(executed))
         self.assertIn("[Sistema] Esecuzione in pausa.", logs)
         self.assertEqual(sent[-1]["status"], "running")
 

@@ -17,7 +17,13 @@ REM -----------------------------------------------------------------------
 REM 1. Virtual environment
 REM -----------------------------------------------------------------------
 if not exist "env" (
-    echo [INIT] Creazione del virtual environment con Python 3.12...
+    python -c "import sys; sys.exit(sys.version_info < (3, 11))" >nul 2>&1
+    if errorlevel 1 (
+        echo [ERRORE] Serve Python 3.11 o successivo, installato e nel PATH.
+        pause
+        exit /b 1
+    )
+    echo [INIT] Creazione del virtual environment...
     python -m venv env
     if errorlevel 1 (
         echo [ERRORE] Impossibile creare il virtual environment. Verifica che Python sia installato.

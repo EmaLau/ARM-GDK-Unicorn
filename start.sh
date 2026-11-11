@@ -15,9 +15,14 @@ PROJECT_DIR=$(pwd)
 echo "[START] Configurazione ed esecuzione dell'architettura modulare..."
 
 # --- Gestione del virtual environment ---
-# Crea l'ambiente virtuale solo se non esiste già (Python 3.12 se c'è, altrimenti python3)
+# Crea l'ambiente virtuale solo se non esiste già, con il Python più recente tra
+# quelli installati (serve almeno la 3.11)
 if [ ! -d "env" ]; then
-    PYTHON_BIN="$(command -v python3.12 || command -v python3)"
+    PYTHON_BIN="$(command -v python3.13 || command -v python3.12 || command -v python3.11 || command -v python3)"
+    if ! "$PYTHON_BIN" -c 'import sys; sys.exit(sys.version_info < (3, 11))' 2>/dev/null; then
+        echo "[ERRORE] Serve Python 3.11 o successivo (trovato: $("$PYTHON_BIN" --version 2>&1))."
+        exit 1
+    fi
     echo "[INIT] Creazione del virtual environment con $PYTHON_BIN..."
     "$PYTHON_BIN" -m venv env || { echo "[ERRORE] Impossibile creare il virtual environment."; exit 1; }
 fi

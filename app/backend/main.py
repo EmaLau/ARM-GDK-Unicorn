@@ -6,6 +6,7 @@
 # e la telemetria dell'emulatore viene inoltrata alla UI.
 
 import json
+import logging
 import sys
 from pathlib import Path
 
@@ -16,6 +17,9 @@ sys.path.append(str(Path(__file__).resolve().parent.parent.parent))
 from app.backend.core_compiler import ARMCompiler
 
 app = FastAPI(title="ARM GDK Backend Hub")
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+log = logging.getLogger("backend")
 
 # Origini ammesse per le connessioni WebSocket.
 # I due client legittimi sono processi Python locali: il frontend NiceGUI (libreria
@@ -77,7 +81,11 @@ async def ui_endpoint(websocket: WebSocket):
 
     try:
         async for message in websocket.iter_text():
-            data = json.loads(message)
+            try:
+                data = json.loads(message)
+            except json.JSONDecodeError:
+                log.warning("Messaggio non valido dall'interfaccia, ignorato: %.200s", message)
+                continue
             action = data.get("action")
 
             if action == "compile":
@@ -95,8 +103,9 @@ async def ui_endpoint(websocket: WebSocket):
                         command["type"] = "COMMAND"
                         command.setdefault("breakpoints", [])
                         await unicorn_socket.send_json(command)
-                    except Exception:
+                    except Exception as e:
                         # Se l'invio fallisce l'emulatore si è probabilmente disconnesso
+                        log.warning("Invio del comando '%s' all'emulatore fallito (%s): emulatore disconnesso", action, e)
                         unicorn_socket = None
                 else:
                     # Nessun emulatore connesso: avvisa la UI senza crashare
@@ -126,9 +135,13 @@ async def telemetry_endpoint(websocket: WebSocket):
 
     try:
         async for message in websocket.iter_text():
+            try:
+                data = json.loads(message)
+            except json.JSONDecodeError:
+                log.warning("Messaggio non valido dall'emulatore, ignorato: %.200s", message)
+                continue
             if ui_socket:
                 try:
-                    data = json.loads(message)
                     # Normalizza il payload prima di inoltrarlo alla UI
                     await ui_socket.send_json({
                         "type": "UPDATE_STATE",
@@ -140,8 +153,9 @@ async def telemetry_endpoint(websocket: WebSocket):
                             "status": data.get("status", "running")
                         }
                     })
-                except Exception:
+                except Exception as e:
                     # Se la UI si è disconnessa nel frattempo, azzera il riferimento
+                    log.warning("Invio dello stato all'interfaccia fallito (%s): interfaccia disconnessa", e)
                     ui_socket = None
     except WebSocketDisconnect:
         unicorn_socket = None

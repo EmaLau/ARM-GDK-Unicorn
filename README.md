@@ -245,7 +245,7 @@ Le altre chiamate restituiscono `-ENOSYS` in `r0` e mostrano un avviso nella con
 
 ## Requisiti
 
-* Python 3.10 o successivo, con pip
+* Python 3.11 o successivo, con pip (le versioni delle librerie sono fissate in `requirements.txt`)
 * La toolchain GNU per ARM: servono solo `arm-none-eabi-as` e `arm-none-eabi-ld`
 
 | Sistema | Installazione della toolchain |
@@ -323,7 +323,9 @@ Se il debugger è già aperto, un secondo avvio si ferma subito con un messaggio
 python -m unittest discover -s tests -v
 ```
 
-I test compilano ed eseguono nell'emulatore una serie di programmi (cicli, funzioni, stringhe, `.word`, costanti calcolate, errori con numero di riga). Se la toolchain GNU non è installata vengono saltati.
+I test compilano ed eseguono nell'emulatore una serie di programmi (cicli, funzioni, stringhe, `.word`, costanti calcolate, errori con numero di riga), provano chiamate di sistema, breakpoint e velocità dell'emulatore, e avviano e chiudono il debugger completo con il lanciatore. Se la toolchain GNU non è installata i test che ne hanno bisogno vengono saltati; il test del lanciatore viene saltato se il debugger è già aperto.
+
+A ogni push GitHub Actions esegue gli stessi test su Windows, macOS e Linux, con Python 3.11 e 3.13 (`.github/workflows/tests.yml`).
 
 ---
 

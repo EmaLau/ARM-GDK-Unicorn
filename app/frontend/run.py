@@ -4,17 +4,22 @@
 
 import asyncio
 import json
+import logging
 import os
 import re
 import sys
 from pathlib import Path
 
 import websockets
+import websockets.exceptions
 from nicegui import app, ui, background_tasks
 
 # Aggiunge la root del progetto al path per importare i percorsi condivisi
 sys.path.append(str(Path(__file__).resolve().parent.parent.parent))
 from app.paths import BUILD_LINES, ensure_workspace
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+log = logging.getLogger("interfaccia")
 
 # ---------------------------------------------------------------------------
 # Stato globale del debugger
@@ -75,7 +80,7 @@ async def send_command_to_backend(action: str, current_code: str = None):
         try:
             await ws.send(json.dumps(payload))
         except Exception as e:
-            print(f"[UI] Invio comando fallito: {e}")
+            log.warning("Invio del comando '%s' al backend fallito: %s", action, e)
 
 
 def load_source_code():
@@ -157,73 +162,91 @@ def analizza_registri_attivi(testo_istruzione: str):
     return registri_trovati
 
 
+def handle_backend_message(payload: dict):
+    """Aggiorna lo stato del debugger con un messaggio del backend (UPDATE_STATE o CONSOLE_LOG)."""
+    # Il backend invia UPDATE_STATE (stato emulatore) o CONSOLE_LOG (messaggi testuali)
+    if payload.get("type") == "UPDATE_STATE" or payload.get("type") == "CONSOLE_LOG":
+        data = payload.get("data", payload)
+
+        if "pc" in data:
+            debugger_state["pc"] = data.get("pc", "0x10000")
+        if "registers" in data:
+            debugger_state["registers"] = data.get("registers", debugger_state["registers"])
+        if "memory" in data:
+            debugger_state["memory"] = data.get("memory", {})
+
+        # Accoda i messaggi di log nella console dell'UI
+        if "console_output" in data and data["console_output"]:
+            if isinstance(data["console_output"], list):
+                debugger_state["console_output"].extend(data["console_output"])
+            else:
+                debugger_state["console_output"].append(data["console_output"])
+        elif "message" in payload:
+            debugger_state["console_output"].append(payload["message"])
+
+        # Determina quali registri sono referenziati dall'istruzione corrente
+        pc_corrente = debugger_state["pc"]
+        debugger_state["active_regs"] = set()
+        for row in debugger_state["source_code"]:
+            if row["is_instruction"] and row["pc_addr"] == pc_corrente:
+                debugger_state["active_regs"] = analizza_registri_attivi(row["text"])
+                break
+
+        # Lo stato di terminazione lo decide solo l'emulatore: i messaggi del
+        # compilatore (CONSOLE_LOG) non hanno 'status' e non lo cambiano
+        if "status" in data:
+            debugger_state["terminated"] = data["status"] == "terminated"
+
+        # Ricarica il sorgente per riflettere eventuali modifiche salvate
+        debugger_state["source_code"] = load_source_code()
+
+        # Limita il buffer della console a 100 messaggi per evitare memory leak
+        if len(debugger_state["console_output"]) > 100:
+            debugger_state["console_output"] = debugger_state["console_output"][-100:]
+
+
 async def maintain_backend_connection():
     """
     Coroutine persistente che mantiene attiva la connessione WebSocket
     verso il backend (ws://127.0.0.1:8001/ui).
 
     In caso di disconnessione attende 2 secondi e ritenta automaticamente.
-    Per ogni messaggio ricevuto aggiorna lo stato globale del debugger:
-    registri, memoria, PC, output console e flag di terminazione.
+    Ogni messaggio ricevuto aggiorna lo stato del debugger tramite
+    handle_backend_message; un messaggio difettoso viene registrato nel log
+    senza far cadere la connessione.
     """
     global backend_ws
     uri = "ws://127.0.0.1:8001/ui"
+    connected_once = False
 
     while True:
         try:
             async with websockets.connect(uri) as ws:
                 async with backend_ws_lock:
                     backend_ws = ws
+                connected_once = True
+                log.info("Connesso al backend")
                 debugger_state["console_output"].append("[Sistema] Connesso al Backend centrale.")
                 # Sincronizza i breakpoint già impostati al momento della connessione
                 await send_command_to_backend('update_breakpoints')
 
                 while True:
                     message = await ws.recv()
-                    payload = json.loads(message)
+                    try:
+                        handle_backend_message(json.loads(message))
+                    except Exception:
+                        log.exception("Messaggio del backend non gestito: %.200s", message)
 
-                    # Il backend invia UPDATE_STATE (stato emulatore) o CONSOLE_LOG (messaggi testuali)
-                    if payload.get("type") == "UPDATE_STATE" or payload.get("type") == "CONSOLE_LOG":
-                        data = payload.get("data", payload)
-
-                        if "pc" in data:
-                            debugger_state["pc"] = data.get("pc", "0x10000")
-                        if "registers" in data:
-                            debugger_state["registers"] = data.get("registers", debugger_state["registers"])
-                        if "memory" in data:
-                            debugger_state["memory"] = data.get("memory", {})
-
-                        # Accoda i messaggi di log nella console dell'UI
-                        if "console_output" in data and data["console_output"]:
-                            if isinstance(data["console_output"], list):
-                                debugger_state["console_output"].extend(data["console_output"])
-                            else:
-                                debugger_state["console_output"].append(data["console_output"])
-                        elif "message" in payload:
-                            debugger_state["console_output"].append(payload["message"])
-
-                        # Determina quali registri sono referenziati dall'istruzione corrente
-                        pc_corrente = debugger_state["pc"]
-                        debugger_state["active_regs"] = set()
-                        for row in debugger_state["source_code"]:
-                            if row["is_instruction"] and row["pc_addr"] == pc_corrente:
-                                debugger_state["active_regs"] = analizza_registri_attivi(row["text"])
-                                break
-
-                        # Lo stato di terminazione lo decide solo l'emulatore: i messaggi del
-                        # compilatore (CONSOLE_LOG) non hanno 'status' e non lo cambiano
-                        if "status" in data:
-                            debugger_state["terminated"] = data["status"] == "terminated"
-
-                        # Ricarica il sorgente per riflettere eventuali modifiche salvate
-                        debugger_state["source_code"] = load_source_code()
-
-                        # Limita il buffer della console a 100 messaggi per evitare memory leak
-                        if len(debugger_state["console_output"]) > 100:
-                            debugger_state["console_output"] = debugger_state["console_output"][-100:]
-
+        except (OSError, websockets.exceptions.WebSocketException) as e:
+            # Backend non ancora avviato o connessione persa: si riprova ogni 2 secondi,
+            # registrando solo il cambio di stato per non riempire il log
+            if connected_once:
+                log.warning("Connessione al backend persa (%s): riprovo", e)
+                debugger_state["console_output"].append("[Sistema] Connessione al Backend persa: riprovo...")
+                connected_once = False
+            await asyncio.sleep(2)
         except Exception:
-            # Qualsiasi errore (connessione rifiutata, timeout, ecc.) causa un retry dopo 2s
+            log.exception("Errore inatteso nella connessione al backend: riprovo tra 2 secondi")
             await asyncio.sleep(2)
 
 
