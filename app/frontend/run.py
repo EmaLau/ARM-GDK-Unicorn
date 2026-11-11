@@ -352,15 +352,19 @@ def index_page():
 
         # --- Pannello sinistro: tab con vista debug e editor del sorgente ---
         with ui.card().classes(
-                'bg-slate-950 border border-slate-800 p-2 shadow-xl flex-[2] min-w-[550px] h-[580px] flex flex-col'):
-            with ui.tabs().classes('w-full border-b border-slate-800') as tabs:
-                tab_debug = ui.tab('Monitor Debugger')
-                tab_editor = ui.tab('Scrivi Codice (workspace/main.s)')
+                # Alto quanto la colonna di destra (self-stretch). flex-nowrap: con l'a capo, un
+                # sorgente più alto del riquadro finiva in una seconda colonna fuori vista
+                'bg-slate-950 border border-slate-800 p-2 shadow-xl flex-[2] min-w-[550px] min-h-[580px] self-stretch flex flex-col flex-nowrap'):
+            with ui.tabs(value='Monitor Debugger').classes('w-full border-b border-slate-800') as tabs:
+                ui.tab('Monitor Debugger')
+                ui.tab('Scrivi Codice (workspace/main.s)')
 
-            with ui.tab_panels(tabs, value=tab_debug).classes('w-full bg-transparent flex-grow p-2 text-xs'):
+            # Due contenitori mostrati e nascosti dalle schede; min-h-0 permette all'area di
+            # restare alta quanto il riquadro e di far scorrere il sorgente al suo interno
+            with ui.element('div').classes('w-full bg-transparent flex-grow min-h-0 p-2 text-xs overflow-hidden'):
 
                 # Tab 1: Vista del codice sorgente con evidenziazione del PC e breakpoint
-                with ui.tab_panel(tab_debug).classes('p-0 h-full overflow-y-auto') as debug_panel:
+                with ui.column().classes('w-full p-0 h-full overflow-y-auto gap-0') as debug_panel:
                     code_ui_rows = []  # Lista dei componenti UI per aggiornamento differenziale
 
                     def render_debug_view():
@@ -393,7 +397,9 @@ def index_page():
 
                                         # Solo le righe con istruzione hanno il pulsante breakpoint cliccabile
                                         if row["is_instruction"]:
-                                            bp_btn = ui.button(on_click=toggle_breakpoint).classes(
+                                            # color=None: senza, Quasar aggiunge bg-primary e il pallino
+                                            # resta blu anche quando il breakpoint è attivo (rosso)
+                                            bp_btn = ui.button(on_click=toggle_breakpoint, color=None).classes(
                                                 'w-3 h-3 min-h-0 p-0 rounded-full cursor-pointer bg-slate-800 opacity-20')
                                         else:
                                             ui.label('').classes('w-3 h-3')
@@ -421,14 +427,17 @@ def index_page():
                     render_debug_view()
 
                 # Tab 2: Textarea per modificare direttamente il sorgente Assembly
-                with ui.tab_panel(tab_editor).classes('p-0 h-full flex flex-col'):
+                with ui.column().classes('w-full p-0 h-full flex flex-col gap-0') as editor_panel:
                     ui.label(
                         "Modifica il codice Assembly ARMv7 qui sotto, poi premi 'Salva & Compila': il programma "
                         "viene caricato nell'emulatore. Continue, Step e Restart non ricompilano.").classes(
                         'text-slate-400 mb-2 italic')
                     editor_textarea = ui.textarea(value=debugger_state["raw_source_text"]).classes(
                         'w-full flex-grow font-mono bg-slate-900 text-slate-100 p-4 rounded border border-slate-700 focus:border-cyan-500 resize-none h-[440px]'
-                    ).props('square outlined dark input-style="height: 400px; resize: none"')  # area di testo alta quanto il riquadro
+                    ).props('square outlined dark input-style="height: max(400px, calc(100vh - 330px)); resize: none"')  # area di testo alta quanto il riquadro
+
+            debug_panel.bind_visibility_from(tabs, 'value', backward=lambda v: v == 'Monitor Debugger')
+            editor_panel.bind_visibility_from(tabs, 'value', backward=lambda v: v != 'Monitor Debugger')
 
         # --- Pannello destro: registri CPU e dump dello stack ---
         with ui.column().classes('flex-1 min-w-[350px] gap-4'):

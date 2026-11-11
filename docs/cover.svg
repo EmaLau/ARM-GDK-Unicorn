@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 300" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#1b1430"/><stop offset=".7" stop-color="#121216"/></linearGradient>
+    <radialGradient id="g" cx="62%" cy="40%" r="55%"><stop offset="0" stop-color="#7c3aed" stop-opacity=".35"/><stop offset="1" stop-color="#7c3aed" stop-opacity="0"/></radialGradient>
+  </defs>
+  <rect width="400" height="300" rx="20" fill="url(#bg)" stroke="none"/>
+  <rect width="400" height="300" rx="20" fill="url(#g)" stroke="none"/>
+
+  <!-- listato assembly con la riga corrente evidenziata -->
+  <rect x="28" y="40" width="196" height="220" rx="14" fill="#0e0e17" fill-opacity=".7" stroke="#ffffff" stroke-opacity=".45" stroke-width="1.6"/>
+  <g fill="#ffffff" fill-opacity=".35" stroke="none">
+    <circle cx="44" cy="62" r="3"/><circle cx="56" cy="62" r="3"/><circle cx="68" cy="62" r="3"/>
+  </g>
+  <path d="M28 76 H224" stroke="#ffffff" stroke-opacity=".25" stroke-width="1.2"/>
+  <g stroke="#ffffff" stroke-opacity=".35" stroke-width="2.4">
+    <path d="M48 96 H80"/><path d="M92 96 H150"/>
+    <path d="M48 116 H80"/><path d="M92 116 H170"/>
+    <path d="M48 156 H80"/><path d="M92 156 H140"/>
+    <path d="M48 176 H80"/><path d="M92 176 H180"/>
+    <path d="M48 196 H80"/><path d="M92 196 H128"/>
+    <path d="M48 216 H80"/><path d="M92 216 H160"/>
+    <path d="M48 236 H80"/><path d="M92 236 H120"/>
+  </g>
+  <rect x="34" y="126" width="184" height="20" rx="5" fill="#ffcc00" fill-opacity=".18" stroke="none"/>
+  <path d="M34 126 V146" stroke="#ffcc00" stroke-width="3"/>
+  <g stroke="#ffcc00" stroke-width="2.4"><path d="M48 136 H80"/><path d="M92 136 H176"/></g>
+  <!-- breakpoint -->
+  <circle cx="40" cy="196" r="4" fill="#ef4444" stroke="none"/>
+
+  <!-- registri -->
+  <g stroke="#ffffff" stroke-opacity=".45" stroke-width="1.4">
+    <rect x="244" y="40" width="58" height="36" rx="7"/><rect x="314" y="40" width="58" height="36" rx="7"/>
+    <rect x="244" y="86" width="58" height="36" rx="7"/><rect x="314" y="86" width="58" height="36" rx="7"/>
+    <rect x="244" y="132" width="58" height="36" rx="7"/>
+  </g>
+  <rect x="314" y="132" width="58" height="36" rx="7" fill="#ffcc00" fill-opacity=".12" stroke="#ffcc00" stroke-opacity=".8" stroke-width="1.4"/>
+  <g stroke="#ffffff" stroke-opacity=".3" stroke-width="2">
+    <path d="M256 52 H268"/><path d="M256 64 H290"/><path d="M326 52 H338"/><path d="M326 64 H360"/>
+    <path d="M256 98 H268"/><path d="M256 110 H290"/><path d="M326 98 H338"/><path d="M326 110 H360"/>
+    <path d="M256 144 H268"/><path d="M256 156 H290"/>
+  </g>
+  <g stroke="#ffcc00" stroke-width="2"><path d="M326 144 H338"/><path d="M326 156 H360"/></g>
+
+  <!-- flag N Z C V -->
+  <g font-family="ui-monospace, Menlo, monospace" font-size="13" font-weight="700" text-anchor="middle" stroke="none">
+    <rect x="244" y="186" width="26" height="24" rx="5" fill="none" stroke="#ffffff" stroke-opacity=".35" stroke-width="1.3"/>
+    <text x="257" y="203" fill="#ffffff" fill-opacity=".45">N</text>
+    <rect x="276" y="186" width="26" height="24" rx="5" fill="#ffcc00" stroke="none"/>
+    <text x="289" y="203" fill="#121216">Z</text>
+    <rect x="308" y="186" width="26" height="24" rx="5" fill="#ffcc00" stroke="none"/>
+    <text x="321" y="203" fill="#121216">C</text>
+    <rect x="340" y="186" width="26" height="24" rx="5" fill="none" stroke="#ffffff" stroke-opacity=".35" stroke-width="1.3"/>
+    <text x="353" y="203" fill="#ffffff" fill-opacity=".45">V</text>
+  </g>
+
+  <!-- pulsante step -->
+  <rect x="244" y="226" width="128" height="34" rx="17" stroke="#ffffff" stroke-opacity=".45" stroke-width="1.4"/>
+  <path d="M290 243 a10 10 0 0 1 18 -5" stroke="#ffffff" stroke-opacity=".6" stroke-width="1.8"/>
+  <path d="M309 232 l-1 7 l-7 -1" stroke="#ffffff" stroke-opacity=".6" stroke-width="1.8"/>
+  <path d="M316 243 H332" stroke="#ffffff" stroke-opacity=".35" stroke-width="2"/>
+</svg>

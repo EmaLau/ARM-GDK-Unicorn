@@ -1,384 +1,194 @@
 # ARM-GDK-Unicorn
 
-ARM-GDK-Unicorn è un ambiente didattico per lo sviluppo, l'esecuzione e il debug di programmi **ARMv7 Assembly**, realizzato interamente in Python.
+🇬🇧 **English** · 🇮🇹 [Italiano](README.it.md)
 
-Il progetto combina:
+<p align="center"><img src="docs/cover.svg" width="400" alt=""></p>
 
-* **Toolchain GNU per ARM** (`arm-none-eabi-as` e `arm-none-eabi-ld`) per assemblare e collegare il codice, con la stessa sintassi usata nei corsi;
-* **Unicorn Engine** per l'emulazione della CPU ARMv7;
-* **FastAPI** come hub di comunicazione;
-* **NiceGUI** per l'interfaccia grafica web.
+**An educational environment to write, run and debug ARMv7 assembly programs, right in the browser.** You write code in the GNU syntax used in computer architecture courses, assemble it with the real GNU ARM toolchain and run it one instruction at a time in a CPU emulator, watching registers, flags, stack and memory change at every step.
 
-L'obiettivo è fornire una piattaforma semplice e comprensibile per studenti, docenti e appassionati di architettura dei calcolatori che desiderano osservare il comportamento interno di un processore ARM durante l'esecuzione di un programma Assembly.
+<p align="center"><img src="docs/screenshot.png" width="900" alt="The debugger running fattoriale.s"></p>
 
----
+> The user interface is in Italian. The button names used below (*Salva & Compila*, *Continue*, *Step*…) are the ones shown on screen.
 
-# Caratteristiche principali
+## Features
 
-* Compilazione Assembly ARMv7 direttamente dal browser.
-* Emulazione ARMv7 tramite Unicorn Engine.
-* Debug passo-passo (Step).
-* Esecuzione continua (Run).
-* Pausa dell'esecuzione.
-* Restart del programma.
-* Gestione breakpoint.
-* Visualizzazione registri CPU.
-* Visualizzazione Stack.
-* Console di output.
-* Editor Assembly integrato.
-* Aggiornamento dello stato in tempo reale tramite WebSocket.
+- **Edit and build in the browser**: *Salva & Compila* (save & build) assembles the code with `arm-none-eabi-as` and `arm-none-eabi-ld` and loads it into the emulator right away. Errors show up in the console with their line number.
+- **Single-step execution (Step)** and **continuous execution (Continue)** with adjustable speed, from 1 instruction per second, to follow the program line by line, up to full speed.
+- **Breakpoints** with one click next to the line: execution stops *before* the marked instruction.
+- **Registers** r0–r12, sp, lr, pc and cpsr, with the ones used by the current instruction highlighted.
+- **N Z C V flags** of the CPSR, each with an explanation.
+- **Stack** around SP and **`.data`/`.bss` memory** with the program's labels, value and ASCII characters.
+- **Linux system calls** `exit` and `write`, with the program output in the console.
+- **Ready-made examples** in [`examples/`](examples/): loops, arrays, recursive functions, strings and flags.
+- **Runs on Windows, macOS and Linux**, checked by GitHub Actions on every change.
 
----
+## Quick start
 
-# Architettura
+### 1. Requirements
 
-Il sistema è composto da tre moduli indipendenti:
+- **Python 3.11** or later.
+- **The GNU ARM toolchain**: only `arm-none-eabi-as` and `arm-none-eabi-ld` are needed.
 
-1. **Frontend NiceGUI**
-2. **Backend FastAPI**
-3. **Worker Unicorn**
+| System  | Installing the toolchain |
+| ------- | ------------------------ |
+| Windows | [Arm GNU Toolchain](https://developer.arm.com/downloads/-/arm-gnu-toolchain-downloads), *arm-none-eabi* for a Windows host; during setup tick *Add path to environment variable* |
+| macOS   | `brew install arm-none-eabi-binutils` |
+| Linux   | `sudo apt install binutils-arm-none-eabi` (Debian, Ubuntu) or your distribution's equivalent package |
 
-La comunicazione avviene esclusivamente tramite WebSocket.
+If the toolchain lives in a non-standard folder, put its `bin` folder in the `ARM_TOOLCHAIN_DIR` environment variable.
 
-```text
-Frontend ↔ Backend ↔ Unicorn Worker
+### 2. Start
+
+```bash
+./start.sh        # macOS and Linux
+start.bat         # Windows
 ```
 
-## Diagramma Mermaid
+On first run the script creates a Python virtual environment, installs the dependencies pinned in `requirements.txt` and checks for the toolchain. If it is missing, it explains how to install it and stops. It then starts the three modules in the same window and opens the browser at <http://127.0.0.1:8080>.
+
+### 3. Stop
+
+Everything closes together in any of these ways:
+- the **Chiudi** (close) button in the interface;
+- **Ctrl+C**;
+- closing the terminal window.
+
+If one of the modules stops because of an error, the launcher stops the others too.
+
+## How to use it
+
+1. **Write** the program in the *Scrivi codice* (write code) tab. Until you save, **● Modifiche non salvate** (unsaved changes) is shown.
+2. Press **Salva & Compila**. If the build succeeds, the program is loaded into the emulator and restarts from the beginning. Continue, Step and Restart never rebuild: they always run the last built version, and warn you if the editor has unsaved changes.
+3. **Run** with *Step* or *Continue*, choosing the speed in the *Velocità* (speed) menu. *Pause* suspends, *Restart* takes the program back to the start.
+4. **Watch** the current line in the *Monitor* tab, the registers, flags, stack, `.data` memory and console.
+
+The program ends with the `exit` system call. After `exit` no other instruction runs until *Restart*.
+
+Several browser tabs can be opened on the same debugger: they all show the same state.
+
+## Examples
+
+| File | What it shows | Result |
+| ---- | ------------- | ------ |
+| [`hello.s`](examples/hello.s) | `write` and `exit`, computed constant `len = . - msg` | prints a string |
+| [`somma.s`](examples/somma.s) | counting loop, `cmp` and `ble` | `exit(55)`: sum of 1 to 10 |
+| [`massimo.s`](examples/massimo.s) | `.word` array, post-increment addressing, conditional instructions (`movgt`) | `exit(42)`: largest element |
+| [`fattoriale.s`](examples/fattoriale.s) | recursive function with `bl`, `push` and `pop`; the stack growing | `exit(120)`: 5! |
+| [`lunghezza.s`](examples/lunghezza.s) | `.asciz` string, `ldrb`, `write` with a computed length | prints the string and exits with its length |
+| [`flag.s`](examples/flag.s) | how `adds`, `subs` and `cmp` change the N Z C V flags | follow it with Step |
+
+The examples are commented in Italian. To try one, paste it into the editor and press *Salva & Compila*. On first start the editor contains `hello.s`.
+
+## Supported assembly
+
+This is the GNU ARM assembler syntax (ARMv7-A, ARM mode):
+- labels, also on the same line as an instruction;
+- `.text`, `.data` and `.bss` sections;
+- directives such as `.word`, `.byte`, `.ascii`, `.asciz`, `.space`, `.align` and `.equ`;
+- constants such as `len = . - msg`;
+- pseudo-instructions such as `ldr r1, =msg`;
+- `@` comments.
+
+The program starts at the `_start` label, declared with `.global _start`. Code is loaded at `0x10000`, data right after it, the stack at `0x70000000`.
+
+| Number (`r7`) | Call         | Behaviour |
+| ------------- | ------------ | --------- |
+| 1             | `exit`       | ends the program with the code in `r0` |
+| 4             | `write`      | writes `r2` bytes from buffer `r1` to stdout (`r0` = 1) or stderr (`r0` = 2) and returns the number of bytes written in `r0` |
+| 248           | `exit_group` | same as `exit` |
+
+Any other call returns `-ENOSYS` in `r0` and shows a warning in the console.
+
+## Architecture
+
+Three Python modules, started and stopped together by `app/launcher.py`, talking over WebSockets:
 
 ```mermaid
----
-title: ARM-GDK-Unicorn — Architettura e flusso dati
----
-flowchart TB
+flowchart LR
+    USER(["👤 User<br/>browser at 127.0.0.1:8080"])
 
-    USER(["👤 Utente"])
-
-    subgraph BOOT ["⚙️ Avvio — start.sh / start.bat"]
-        direction LR
-        SH["Crea venv Python
-pip install requirements.txt
-Controlla la toolchain GNU
-Lancia i 3 moduli in ordine"]
+    subgraph L ["⚙️ app/launcher.py — starts and stops the 3 modules"]
+        direction TB
+        FE["🖥️ NiceGUI interface<br/>app/frontend/run.py<br/>editor · source with breakpoints<br/>registers · NZCV flags · stack · .data · console"]
+        BE["🔀 FastAPI backend · port 8001<br/>app/backend/main.py<br/>WebSockets /ui and /telemetry"]
+        EMU["🔧 Unicorn emulator<br/>app/emulator/unicorn_worker.py<br/>Step · block-based Continue · breakpoints<br/>exit / write syscalls"]
     end
 
-    subgraph FE ["🖥️ Frontend NiceGUI — porta 8080"]
-        FE_SRC["Viewer sorgente"]
-        FE_REG["Registri CPU"]
-        FE_MEM["Dump Stack"]
-        FE_CON["Console"]
-        FE_EDT["Editor Assembly"]
-        FE_BTN["Step · Run · Pause · Restart · Compila"]
+    subgraph TC ["🛠️ GNU ARM toolchain"]
+        direction TB
+        AS["arm-none-eabi-as -g"] --> LD["arm-none-eabi-ld<br/>.text at 0x10000 · entry _start"]
     end
 
-    subgraph BE ["🔀 Backend FastAPI — porta 8001"]
-        BE_UI["WebSocket /ui"]
-        BE_TEL["WebSocket /telemetry"]
-        BE_COMP["ARMCompiler"]
+    subgraph F ["💾 Generated files"]
+        SRC["workspace/main.s"]
+        ELF["build/main.elf"]
+        LINES["build/lines.json<br/>line → address (DWARF)"]
     end
 
-    subgraph EMU ["🔧 Unicorn Worker"]
-        EMU_LOAD["Caricamento binario"]
-        EMU_LOOP["Loop di esecuzione"]
-        EMU_STATE["Telemetria CPU"]
-    end
-
-    USER --> FE_BTN
-    FE_BTN --> BE_UI
-    BE_UI --> BE_COMP
-    BE_UI --> BE_TEL
-    BE_TEL --> EMU_LOOP
-    EMU_LOOP --> EMU_STATE
-    EMU_STATE --> BE_TEL
-    BE_TEL --> FE_SRC
-    BE_TEL --> FE_REG
-    BE_TEL --> FE_MEM
-    BE_TEL --> FE_CON
+    USER <--> FE
+    FE -- "commands: compile, step, continue,<br/>pause, restart, set_speed" --> BE
+    BE -- "state: PC, registers, flags,<br/>stack, .data, console" --> FE
+    BE -- "Salva & Compila" --> SRC --> AS
+    LD --> ELF
+    LD --> LINES
+    BE <-- "COMMAND / telemetry" --> EMU
+    ELF -- "loaded at start and on every Restart" --> EMU
+    LINES -- "highlighting and breakpoints" --> FE
 ```
 
----
+- **Interface** (`app/frontend/run.py`, NiceGUI): editor, source with the current line and breakpoints, registers, flags, stack, `.data` memory and console. It refreshes 10 times per second, redrawing only what changed.
+- **Backend** (`app/backend/main.py`, FastAPI): serves the `/ui` WebSocket, for the interface, and `/telemetry`, for the emulator. It builds the code and routes commands and state. It only accepts connections from the local modules, not from web pages.
+- **Compiler** (`app/backend/core_compiler.py`): runs `arm-none-eabi-as -g` and `arm-none-eabi-ld`, then reads the source line ↔ address mapping from the debug information (DWARF), used to highlight the current line and place breakpoints.
+- **Emulator** (`app/emulator/unicorn_worker.py`, Unicorn): loads the ELF, runs one step or a block at a time, handles breakpoints and system calls and sends the state after each step, or every 50 ms during Continue.
 
-# Struttura del progetto
+## Project layout
 
 ```text
 ARM-GDK-Unicorn/
-│
-├── start.sh
-├── start.bat
-├── requirements.txt
-├── LICENSE
-│
-├── examples/
-│   └── hello.s            programma di esempio
-│
+├── start.sh / start.bat     startup (virtual environment, dependencies, toolchain, launcher)
+├── requirements.txt         Python dependencies with the tested versions
+├── examples/                example programs
 ├── app/
-│   ├── launcher.py        avvia i tre moduli e li chiude insieme
-│   ├── toolchain.py       ricerca della toolchain GNU per ARM
-│   ├── paths.py           percorsi condivisi dai tre moduli
-│   │
-│   ├── backend/
-│   │   ├── main.py
-│   │   └── core_compiler.py
-│   │
-│   ├── emulator/
-│   │   └── unicorn_worker.py
-│   │
-│   └── frontend/
-│       └── run.py
-│
-├── workspace/             generata, ignorata da git
-│   └── main.s             copia di lavoro modificata dall'editor
-├── build/                 generata, ignorata da git
-│   └── main.bin           binario prodotto dal compilatore
-└── env/
+│   ├── launcher.py          starts the three modules and stops them together
+│   ├── toolchain.py         finds the GNU ARM toolchain
+│   ├── paths.py             shared paths
+│   ├── backend/             FastAPI backend and compiler
+│   ├── emulator/            Unicorn emulator
+│   └── frontend/            NiceGUI interface
+├── tests/                   automated tests
+├── docs/                    README images
+├── workspace/               generated: the editor's working copy (ignored by git)
+└── build/                   generated: the built program (ignored by git)
 ```
 
-Al primo avvio `workspace/main.s` viene creato copiando `examples/hello.s`: l'editor modifica solo la copia di lavoro, quindi l'esempio e il repository restano puliti.
-
----
-
-# Componenti
-
-## Frontend
-
-Percorso:
-
-```text
-app/frontend/run.py
-```
-
-Responsabilità:
-
-* Editor Assembly
-* Visualizzazione registri
-* Visualizzazione stack
-* Gestione breakpoint
-* Console di output
-* Invio comandi al backend
-
-Porta:
-
-```text
-http://localhost:8080
-```
-
----
-
-## Backend
-
-Percorso:
-
-```text
-app/backend/main.py
-```
-
-Responsabilità:
-
-* Gestione WebSocket
-* Compilazione del codice
-* Smistamento dei messaggi
-* Coordinamento tra GUI ed emulatore
-* Accetta connessioni WebSocket solo dai moduli locali: le connessioni aperte da pagine web (header `Origin` di un browser) vengono rifiutate
-
-Endpoint:
-
-```text
-/ws/ui
-/ws/telemetry
-```
-
----
-
-## Compilatore ARM
-
-Percorso:
-
-```text
-app/backend/core_compiler.py
-```
-
-Basato sulla toolchain GNU per ARM, cercata in automatico (vedi `app/toolchain.py`):
-
-1. `arm-none-eabi-as -g` assembla `workspace/main.s` in `build/main.o`;
-2. `arm-none-eabi-ld` lo collega in `build/main.elf`, con `.text` a `0x10000`, `.data` subito dopo ed entry point `_start`;
-3. dalle informazioni di debug (DWARF) ricava `build/lines.json`, la corrispondenza tra righe del sorgente e indirizzi usata dall'interfaccia per evidenziare la riga corrente e posizionare i breakpoint.
-
-La sintassi è quella dell'assembler GNU: etichette (anche sulla stessa riga dell'istruzione), sezioni `.text` e `.data`, direttive come `.word`, `.byte`, `.ascii`, `.asciz`, `.space`, `.align`, `.equ`, costanti come `len = . - msg`, pseudo-istruzioni come `ldr r1, =msg` e commenti con `@`.
-
-Gli errori arrivano nella console dell'interfaccia con il numero di riga, ad esempio `[Compiler Errore] Riga 4: bad instruction 'bogus r1'`.
-
----
-
-## Emulatore
-
-Percorso:
-
-```text
-app/emulator/unicorn_worker.py
-```
-
-Basato su:
-
-* Unicorn Engine
-
-Funzionalità:
-
-* Esecuzione ARMv7 dell'ELF prodotto dal compilatore, a partire da `_start`
-* Esecuzione passo passo (Step)
-* Esecuzione continua (Continue) a blocchi, con velocità regolabile dall'interfaccia: da 1 istruzione al secondo, per seguire il programma riga per riga, fino alla velocità massima
-* Breakpoint: l'esecuzione si ferma *prima* di eseguire l'istruzione marcata; premendo di nuovo Continue riparte da lì
-* Fine del programma: dopo `exit` (o un'eccezione della CPU, con indirizzo e motivo) non viene eseguita nessun'altra istruzione fino a Restart
-
-Chiamate di sistema Linux supportate (numero in `r7`, argomenti in `r0`-`r2`, risultato in `r0`):
-
-| Numero | Chiamata     | Comportamento |
-| ------ | ------------ | ------------- |
-| 1      | `exit`       | termina il programma con il codice in `r0` |
-| 4      | `write`      | scrive il buffer `r1` di `r2` byte su stdout (`r0` = 1) o stderr (`r0` = 2), conservando spazi e tabulazioni; restituisce in `r0` il numero di byte scritti, oppure `-EBADF` per altri file descriptor |
-| 248    | `exit_group` | come `exit` |
-
-Le altre chiamate restituiscono `-ENOSYS` in `r0` e mostrano un avviso nella console.
-
----
-
-# Installazione
-
-## Requisiti
-
-* Python 3.11 o successivo, con pip (le versioni delle librerie sono fissate in `requirements.txt`)
-* La toolchain GNU per ARM: servono solo `arm-none-eabi-as` e `arm-none-eabi-ld`
-
-| Sistema | Installazione della toolchain |
-| ------- | ----------------------------- |
-| Windows | [Arm GNU Toolchain](https://developer.arm.com/downloads/-/arm-gnu-toolchain-downloads), versione *arm-none-eabi* per host Windows; durante l'installazione spunta *Add path to environment variable* |
-| macOS   | `brew install arm-none-eabi-binutils` |
-| Linux   | `sudo apt install binutils-arm-none-eabi` (Debian, Ubuntu) oppure il pacchetto equivalente della distribuzione |
-
-Se la toolchain è installata in una cartella non standard, indica la sua cartella `bin` nella variabile d'ambiente `ARM_TOOLCHAIN_DIR`. Per controllare che venga trovata:
-
-```bash
-python -m app.toolchain
-```
-
----
-
-## Dipendenze
-
-```bash
-pip install -r requirements.txt
-```
-
-Pacchetti principali:
-
-```text
-fastapi
-uvicorn
-nicegui
-websockets
-unicorn
-websocket-client
-pyelftools
-```
-
----
-
-# Avvio
-
-## Linux / macOS
-
-```bash
-chmod +x start.sh
-./start.sh
-```
-
-## Windows
-
-```cmd
-start.bat
-```
-
-Lo script:
-
-1. crea il virtual environment;
-2. installa le dipendenze e controlla la toolchain GNU (se manca, spiega come installarla e si ferma);
-3. avvia con `app/launcher.py`, nella stessa finestra, il backend (atteso finché non risponde sulla porta 8001), l'emulatore e l'interfaccia, che si apre nel browser.
-
-L'output dei tre moduli compare nella stessa finestra, con il nome del modulo davanti a ogni riga.
-
-## Chiusura
-
-Si chiude tutto insieme, senza processi o finestre che restano aperti:
-
-* premendo **Chiudi** nell'interfaccia;
-* con **Ctrl+C** o chiudendo la finestra del terminale;
-* automaticamente, se uno dei tre moduli si ferma per un errore.
-
-Se il debugger è già aperto, un secondo avvio si ferma subito con un messaggio invece di andare in conflitto sulle porte. Per non aprire il browser all'avvio (ad esempio nelle prove automatiche) imposta `ARM_GDK_NO_BROWSER=1`.
-
----
-
-# Test
+## Tests
 
 ```bash
 python -m unittest discover -s tests -v
 ```
 
-I test compilano ed eseguono nell'emulatore una serie di programmi (cicli, funzioni, stringhe, `.word`, costanti calcolate, errori con numero di riga), provano chiamate di sistema, breakpoint e velocità dell'emulatore, e avviano e chiudono il debugger completo con il lanciatore. Se la toolchain GNU non è installata i test che ne hanno bisogno vengono saltati; il test del lanciatore viene saltato se il debugger è già aperto.
+The tests cover:
+- building and running programs with loops, functions, strings, `.word` and computed constants;
+- errors with their line number;
+- every example;
+- the emulator's system calls, breakpoints and speed;
+- starting and stopping the full debugger.
 
-A ogni push GitHub Actions esegue gli stessi test su Windows, macOS e Linux, con Python 3.11 e 3.13 (`.github/workflows/tests.yml`).
+Without the GNU toolchain the tests that need it are skipped, and the launcher test is skipped if the debugger is already running.
 
----
+On every push GitHub Actions runs the same tests on Windows, macOS and Linux, with Python 3.11 and 3.13 ([`.github/workflows/tests.yml`](.github/workflows/tests.yml)).
 
-# Workflow
+## Options
 
-1. Scrivere Assembly ARM nell'editor. Finché non si salva, accanto al pulsante compare **● Modifiche non salvate**.
-2. Premere **Salva & Compila**: se la compilazione va a buon fine il programma viene caricato subito nell'emulatore, dall'inizio. Continue, Step e Restart non ricompilano: eseguono sempre l'ultima versione compilata (e avvisano se l'editor ha modifiche non salvate).
-3. Eseguire:
+| Environment variable | Effect |
+| -------------------- | ------ |
+| `ARM_TOOLCHAIN_DIR`  | `bin` folder of the GNU ARM toolchain, if it is not on the `PATH` |
+| `ARM_GDK_NO_BROWSER=1` | do not open the browser at startup (automated tests) |
 
-   * Step
-   * Continue, scegliendo la velocità nel menu *Velocità*
-   * Pause
-4. Analizzare:
+To check that the toolchain is found: `python -m app.toolchain`.
 
-   * registri, con il registro usato dall'istruzione corrente evidenziato;
-   * flag **N Z C V** del CPSR, accesi quando valgono 1 (passando sopra con il mouse se ne legge il significato);
-   * stack intorno a SP;
-   * memoria **.data** (e .bss): una riga per parola, con etichetta (`msg`, `val`…), valore esadecimale e caratteri ASCII;
-   * output della console.
+## License
 
-Si possono aprire più schede del browser sullo stesso debugger: mostrano tutte lo stesso stato, e l'editor di una scheda si aggiorna quando un'altra compila (se non ha modifiche in corso).
+The project's code is released under the [MIT](LICENSE) license.
 
----
-
-# Caso d'uso didattico
-
-ARM-GDK-Unicorn è pensato per:
-
-* corsi di Architettura degli Elaboratori;
-* Sistemi Operativi;
-* Programmazione Assembly ARM;
-* Reverse Engineering;
-* studio delle syscall Linux ARM;
-* laboratori universitari.
-
----
-
-# Tecnologie utilizzate
-
-| Tecnologia      | Ruolo                   |
-| --------------- | ----------------------- |
-| Python          | Linguaggio principale   |
-| FastAPI         | Backend                 |
-| NiceGUI         | Frontend                |
-| WebSocket       | Comunicazione real-time |
-| GNU binutils    | Assembler e linker ARM  |
-| Unicorn Engine  | Emulatore ARM           |
-| PyELFTools      | Lettura dell'ELF e delle informazioni di debug |
-
----
-
-# Licenza
-
-Il codice di questo progetto è distribuito con licenza [MIT](LICENSE).
-
-Le librerie usate hanno licenze proprie: Unicorn Engine e le GNU binutils sono distribuite con licenza GPL, FastAPI, NiceGUI e le altre dipendenze con licenze permissive. Il repository non include il loro codice: le librerie Python vengono installate da `requirements.txt`, la toolchain GNU separatamente.
+The libraries it uses have their own licenses: Unicorn Engine and GNU binutils are GPL-licensed, FastAPI, NiceGUI and the other dependencies use permissive licenses. Their code is not included in this repository: the Python libraries are installed from `requirements.txt`, the GNU toolchain separately.

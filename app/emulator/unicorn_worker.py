@@ -139,8 +139,8 @@ def send_state_to_dashboard(mu, ws, custom_output=None, is_terminated=False, dat
     Legge lo stato corrente dell'emulatore (registri + dump dello stack)
     e lo invia al backend come payload JSON.
 
-    Il dump della memoria copre le 20 word intorno allo Stack Pointer
-    (offset da -80 a +92 byte rispetto a SP allineato a 4 byte).
+    Il dump della memoria copre 11 word intorno allo Stack Pointer
+    (offset da -20 a +20 byte rispetto a SP allineato a 4 byte).
 
     Parametri:
         mu             -- istanza Unicorn
