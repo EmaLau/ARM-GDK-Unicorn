@@ -86,6 +86,10 @@ class LauncherTest(unittest.TestCase):
 
     def test_rifiuta_di_partire_se_la_porta_e_occupata(self):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as busy:
+            if os.name != "nt":
+                # Permette di occupare la porta anche se un collegamento appena chiuso
+                # (ad esempio del test precedente) è ancora in TIME_WAIT
+                busy.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             busy.bind(("127.0.0.1", 8001))
             busy.listen()
             proc = self.launch()
