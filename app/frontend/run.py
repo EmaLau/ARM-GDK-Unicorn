@@ -298,6 +298,14 @@ def index_page():
             ui.select(SPEED_OPTIONS, value=debugger_state["speed"], label='Velocità',
                       on_change=handle_speed).props('dense dark options-dense').classes('w-32 text-xs')
 
+            def handle_close():
+                # Chiude l'interfaccia; il lanciatore (app/launcher.py) se ne accorge
+                # e chiude anche backend ed emulatore
+                ui.notify('Debugger chiuso: puoi chiudere questa scheda.', type='info', timeout=0)
+                ui.timer(0.5, app.shutdown, once=True)
+
+            ui.button('Chiudi', on_click=handle_close).props('flat color=grey icon=power_settings_new text-xs')
+
             # Etichetta che mostra il valore aggiornato del Program Counter
             pc_label = ui.label("PC: 0x10000").classes(
                 'bg-slate-800 px-4 py-1.5 rounded-lg border border-cyan-500/30 text-cyan-400 font-mono text-sm')
@@ -550,4 +558,6 @@ def index_page():
 
 
 # Solo in locale: con 0.0.0.0 chiunque sulla stessa rete potrebbe aprire il debugger
-ui.run(host='127.0.0.1', port=8080, title="ARM Custom Integrated Debugger", reload=False, show=True)
+# ARM_GDK_NO_BROWSER=1 evita di aprire il browser all'avvio (utile per prove e CI)
+ui.run(host='127.0.0.1', port=8080, title="ARM Custom Integrated Debugger", reload=False,
+       show=os.environ.get("ARM_GDK_NO_BROWSER") != "1")

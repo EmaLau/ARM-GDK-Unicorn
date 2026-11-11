@@ -112,6 +112,8 @@ ARM-GDK-Unicorn/
 │   └── hello.s            programma di esempio
 │
 ├── app/
+│   ├── launcher.py        avvia i tre moduli e li chiude insieme
+│   ├── toolchain.py       ricerca della toolchain GNU per ARM
 │   ├── paths.py           percorsi condivisi dai tre moduli
 │   │
 │   ├── backend/
@@ -299,9 +301,19 @@ Lo script:
 
 1. crea il virtual environment;
 2. installa le dipendenze e controlla la toolchain GNU (se manca, spiega come installarla e si ferma);
-3. avvia Backend;
-4. avvia Frontend;
-5. avvia Unicorn Worker.
+3. avvia con `app/launcher.py`, nella stessa finestra, il backend (atteso finché non risponde sulla porta 8001), l'emulatore e l'interfaccia, che si apre nel browser.
+
+L'output dei tre moduli compare nella stessa finestra, con il nome del modulo davanti a ogni riga.
+
+## Chiusura
+
+Si chiude tutto insieme, senza processi o finestre che restano aperti:
+
+* premendo **Chiudi** nell'interfaccia;
+* con **Ctrl+C** o chiudendo la finestra del terminale;
+* automaticamente, se uno dei tre moduli si ferma per un errore.
+
+Se il debugger è già aperto, un secondo avvio si ferma subito con un messaggio invece di andare in conflitto sulle porte. Per non aprire il browser all'avvio (ad esempio nelle prove automatiche) imposta `ARM_GDK_NO_BROWSER=1`.
 
 ---
 
